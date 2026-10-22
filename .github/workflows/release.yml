@@ -1,0 +1,44 @@
+# A version tag (v0.1.0) publishes a GitHub release with the gateway:
+# monokulo-whmcs.zip and its .sha256. The zip is unzipped into the stand-in
+# WHMCS and the tests run against it first.
+#
+# Listing on the WHMCS Marketplace is done by hand.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PHP_VERSION: '8.3'
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag is the version
+        run: |
+          version=$(cat VERSION)
+          test "$GITHUB_REF_NAME" = "v$version" || { echo "tag $GITHUB_REF_NAME is not v$version (VERSION)" >&2; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Start the stand-in WHMCS
+        run: scripts/test up
+      - name: Build the zip, install it, test
+        run: scripts/test all
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<NOTES
+          Monokulo payment gateway for WHMCS 8.13 and 9.x (PHP 8.1 or newer, as your WHMCS supports).
+
+          Install: unzip \`monokulo-whmcs.zip\` into your WHMCS root (it adds \`modules/gateways/monokulo.php\`, \`modules/gateways/monokulo/\` and \`modules/gateways/callback/monokulo.php\`), then activate Monokulo under Setup > Payments > Payment Gateways. See the README for connecting.
+
+          SHA-256: \`$(cut -d' ' -f1 dist/monokulo-whmcs.zip.sha256)\`
+          NOTES
+          gh release create "$GITHUB_REF_NAME" dist/monokulo-whmcs.zip dist/monokulo-whmcs.zip.sha256 \
+            --title "Monokulo for WHMCS $VERSION" --notes-file notes.md

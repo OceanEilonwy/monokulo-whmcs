@@ -1,0 +1,44 @@
+# The stand-in WHMCS (tests/whmcs) with this repository mounted at /repo,
+# on the host's network: WHMCS is http://localhost:8091/ from the browser,
+# from a Monokulo on this machine and from the tests alike. Monokulo only
+# sends its connect flow back to an https address or to localhost, and the
+# webhook address is built from the same System URL, so one address for
+# everyone is what makes the smoke test work. (Linux only: Docker Desktop's
+# host networking differs.)
+name: monokulo-whmcs
+
+services:
+  db:
+    image: mariadb:11.4
+    network_mode: host
+    command: ["--port=${DB_PORT:-33067}", "--bind-address=127.0.0.1"]
+    environment:
+      MARIADB_DATABASE: whmcs
+      MARIADB_USER: whmcs
+      MARIADB_PASSWORD: whmcs
+      MARIADB_ROOT_PASSWORD: whmcs-root
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      retries: 60
+
+  whmcs:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        PHP_VERSION: ${PHP_VERSION:-8.3}
+    image: monokulo-whmcs:php${PHP_VERSION:-8.3}
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_PORT: ${DB_PORT:-33067}
+      PHP_CLI_SERVER_WORKERS: 4
+    working_dir: /repo
+    command: ["php", "-S", "localhost:8091", "-t", "tests/whmcs"]
+    volumes:
+      - ..:/repo
