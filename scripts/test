@@ -1,0 +1,74 @@
+#!/bin/sh
+# Runs the gateway's tests in the PHP container (docker/compose.yaml), as
+# your own user so files it writes in the repository stay yours.
+#
+#   scripts/test up                       start the stand-in WHMCS (PHP_VERSION=8.1|8.2|8.3|8.4) and MariaDB, and install the gateway
+#   scripts/test install                  build the zip and unzip it into the stand-in WHMCS, as a merchant installs it
+#   scripts/test unit|module|http|smoke [phpunit args]
+#   scripts/test all                      install, then every suite but smoke
+#   scripts/test down                     stop and remove the containers
+#
+# Coverage: COVERAGE=1 has each suite write coverage/raw/<suite>.cov (pcov)
+# and `all` merge them into coverage/summary.txt and coverage/html/. The
+# http suite runs the gateway inside PHP's web server, so only the
+# in-process suites (unit, module) count.
+set -eu
+cd "$(dirname "$0")/.."
+
+compose() {
+	docker compose -f docker/compose.yaml "$@"
+}
+
+run() {
+	compose exec -T --user "$(id -u):$(id -g)" -e HOME=/tmp -e MONOKULO_URL="${MONOKULO_URL:-}" -w /repo whmcs "$@"
+}
+
+suite() {
+	name=$1
+	shift
+	if [ "${COVERAGE:-}" = 1 ]; then
+		mkdir -p coverage/raw
+		run php -d pcov.enabled=1 vendor/bin/phpunit --testsuite "$name" --coverage-php "coverage/raw/$name.cov" "$@"
+	else
+		run vendor/bin/phpunit --testsuite "$name" "$@"
+	fi
+}
+
+case "${1:-all}" in
+up)
+	compose up -d --build --wait
+	run composer install --no-interaction --no-progress
+	run php tests/whmcs/install.php
+	"$0" install
+	;;
+install)
+	# The http and smoke suites reach the gateway as WHMCS does, through the
+	# files the zip puts in the WHMCS root (the in-process suites load src/).
+	run php scripts/build-zip
+	run sh -c 'rm -rf tests/whmcs/modules && unzip -q dist/monokulo-whmcs.zip -d tests/whmcs'
+	;;
+down)
+	compose down -v
+	;;
+all)
+	"$0" install
+	rm -rf coverage
+	for name in unit module; do
+		suite "$name"
+	done
+	COVERAGE='' suite http
+	if [ "${COVERAGE:-}" = 1 ]; then
+		run vendor/bin/phpcov merge --text coverage/summary.txt --html coverage/html coverage/raw > /dev/null
+		cat coverage/summary.txt
+	fi
+	;;
+unit | module | http | smoke)
+	name=$1
+	shift
+	suite "$name" "$@"
+	;;
+*)
+	echo "usage: scripts/test up|install|unit|module|http|smoke|all|down" >&2
+	exit 2
+	;;
+esac

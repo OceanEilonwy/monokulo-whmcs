@@ -2,3 +2,4 @@
 /dist/
 /.phpunit.cache/
 /coverage/
+/tests/whmcs/modules/
