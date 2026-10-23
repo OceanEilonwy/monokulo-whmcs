@@ -21,11 +21,14 @@ use WHMCS\Database\Capsule;
  *    back to WHMCS, which redeems the token: connected, with the API's
  *    entry and its onion entry;
  * 4. a client presses Pay with Monero on an invoice: WHMCS reads the entry,
- *    creates the order with its create-order form, keeps the order's
- *    dashboard page, and sends the client to its checkout, which loads;
+ *    creates the order with its create-order form, and sends the client to
+ *    its checkout, which loads; the order's dashboard page opens;
  * 5. a client on the shop's onion address pays the next invoice: sent to
  *    the order's checkout on Monokulo's onion address, the entry not read
- *    again; once the kept entry has expired, it is asked for again.
+ *    again; once the kept entry has expired, it is asked for again;
+ * 6. a client pays an invoice in EUR, for which Monokulo has no rate (the
+ *    stand-in rate provider rate limits it): no order, and the client is
+ *    asked to try again when Monokulo says.
  *
  * And the stand-in Monokulo's answers (tests/Support/Api.php) are checked
  * against the real one's API and its OpenAPI document, and, with
@@ -70,13 +73,6 @@ final class MonokuloSmokeTest extends TestCase {
 		$page = $this->browser->get($checkout);
 		$this->assertSame(200, $page->status, $page->text());
 
-		// The order's dashboard page, as Monokulo linked it: the merchant's,
-		// signed in in this browser.
-		$this->assertMatchesRegularExpression('#\A' . preg_quote($this->monokulo, '#') . '/stores/[^/]+/orders/' . preg_quote($orderId, '#') . '\z#', (string)$order['dashboard_url']);
-		$dashboard = $this->browser->get((string)$order['dashboard_url']);
-		$this->assertSame(200, $dashboard->status);
-		$this->assertStringContainsString($orderId, $dashboard->body);
-
 		// The entry is kept, for Monokulo's max-age.
 		$kept = Whmcs::rows('mod_monokulo_connection')[0];
 		$this->assertNotSame('', (string)$kept['entry_etag']);
@@ -95,6 +91,20 @@ final class MonokuloSmokeTest extends TestCase {
 		$renewed = Whmcs::rows('mod_monokulo_connection')[0];
 		$this->assertSame($kept['entry_etag'], $renewed['entry_etag']);
 		$this->assertGreaterThan(time() + 3000, (int)$renewed['entry_expires_at']);
+
+		// No exchange rate for the invoice's currency right now (the rate
+		// provider is rate limiting Monokulo): no order, the client asked
+		// to try again when Monokulo says, the merchant told why.
+		$eur = Whmcs::invoice(['Starter hosting' => '20.00'], 'EUR');
+		$page = $this->browser->get(Whmcs::URL . 'viewinvoice.php?id=' . $eur);
+		preg_match('#<a href="([^"]+)" class="btn#', $page->body, $m);
+		$refused = $this->browser->get(html_entity_decode($m[1], ENT_QUOTES));
+		$this->assertSame(503, $refused->status, $refused->text());
+		$this->assertStringContainsString('Monero prices are not available right now', $refused->text());
+		$this->assertMatchesRegularExpression('/^Retry-After: 30\r?$/mi', $refused->headers);
+		$this->assertSame([], Whmcs::rows('mod_monokulo_order', ['invoice_id' => $eur]));
+		$this->assertStringContainsString('https://docs.monokulo.com/problems/rates-unavailable', Whmcs::logs());
+		$this->assertStringContainsString('Monokulo suggests waiting 30 seconds', Whmcs::logs());
 
 		// The real API, read with the key WHMCS keeps: the entry and the
 		// order are what the stand-in answers.
@@ -118,6 +128,12 @@ final class MonokuloSmokeTest extends TestCase {
 			$this->assertSame($standInOrder['_links'][$rel]['href'], $read['_links'][$rel]['href'], $rel);
 		}
 		$this->assertStringStartsWith($this->prefix . '/stores/', $read['_links']['mk:dashboard-order']['href']);
+
+		// The order's dashboard page, as Monokulo links it (and its webhooks
+		// do, absolute): the merchant's, signed in in this browser.
+		$dashboard = $this->browser->get($this->monokulo . substr($read['_links']['mk:dashboard-order']['href'], strlen($this->prefix)));
+		$this->assertSame(200, $dashboard->status);
+		$this->assertStringContainsString($orderId, $dashboard->body);
 
 		// A key Monokulo doesn't know is refused at the entry, as a problem.
 		[$refused, $refusedHeaders, $status] = $this->api('/api/v1', 'sk_unknown');
@@ -199,53 +215,76 @@ final class MonokuloSmokeTest extends TestCase {
 			$this->assertArrayHasKey(Api::PROBLEM, $finish['responses'][$status]['content'], (string)$status);
 			$this->assertStringContainsString('problems/' . $problem, $finish['responses'][$status]['description']);
 		}
-		$this->assertStringContainsString('problems/challenge-required', $finish['responses']['429']['description']);
+		// A server is never asked to solve a proof of work: not at the
+		// handshake, the entry or the secret key's forms.
+		foreach ([$finish, $root, $create, $logs] as $operation) {
+			$this->assertStringNotContainsString('challenge-required', (string)json_encode($operation));
+		}
 	}
 
 	/**
-	 * The examples recorded against a test engine: the entry as the secret
-	 * key sees it, an order made with that key, and the plugin handshake's
-	 * answer (as recorded, with or without an onion address).
+	 * The examples recorded against a test engine, by name (`sk`, and
+	 * `sk-with-onion` from a Monokulo with an onion address): the entry as
+	 * the secret key sees it, the order made with that key (the same order
+	 * read back), and the plugin handshake's answer (`no-key`,
+	 * `no-key-with-onion`). Each is what the stand-in answers, link for link.
 	 *
 	 * @param array<string, mixed> $openapi
 	 */
 	private function checkExamples(array $openapi): void {
 		$entries = $this->examples($openapi['paths']['/api/v1']['get']['responses']['200']['content'][Api::HAL_FORMS]);
-		$sk = array_filter($entries, static fn(array $e): bool => isset($e['_templates']['send-logs']));
-		$this->assertNotEmpty($sk, 'an example of the entry as a secret key sees it');
-		foreach ($sk as $example) {
-			$onion = isset($example['_links']['mk:onion-api']);
-			$standIn = Api::entry(onion: $onion);
-			$this->assertEqualsCanonicalizing(array_keys($standIn['_links']), array_keys($example['_links']));
-			$this->assertEqualsCanonicalizing(array_keys($standIn['_templates']), array_keys($example['_templates']));
-			foreach ($standIn['_templates'] as $name => $form) {
-				$this->assertSame([$form['method'], $form['target']], [$example['_templates'][$name]['method'], $example['_templates'][$name]['target']]);
-				$this->assertEqualsCanonicalizing(array_column($form['properties'], 'name'), array_column($example['_templates'][$name]['properties'], 'name'), $name);
-			}
-		}
-
-		$orders = array_filter($this->examples($openapi['paths']['/api/v1/orders']['post']['responses']['201']['content'][Api::HAL_FORMS]), static fn(array $o): bool => isset($o['_links']['mk:dashboard-order']));
-		$this->assertNotEmpty($orders, 'an example of an order made with the secret key');
-		foreach ($orders as $example) {
-			$this->assertSame([], array_diff(array_keys(Api::order()), array_keys($example)));
-			$this->assertEqualsCanonicalizing(array_keys(Api::order(onion: isset($example['_links']['mk:onion-checkout']))['_links']), array_keys($example['_links']));
-		}
-
+		$orders = $this->examples($openapi['paths']['/api/v1/orders']['post']['responses']['201']['content'][Api::HAL_FORMS]);
+		$reads = $this->examples($openapi['paths']['/api/v1/orders/{order_id}']['get']['responses']['200']['content'][Api::HAL_FORMS]);
 		$connections = $this->examples($openapi['paths']['/plugins/connect/{slug}/finish']['post']['responses']['200']['content']['application/json']);
-		$this->assertNotEmpty($connections);
-		foreach ($connections as $example) {
-			$this->assertSame([], array_diff(['public_key', 'secret_token', 'api', 'webhook_signing_secret'], array_keys($example)));
+
+		foreach (['sk' => false, 'sk-with-onion' => true] as $name => $onion) {
+			$this->assertArrayHasKey($name, $entries);
+			$example = $entries[$name];
+			$standIn = Api::entry(onion: $onion);
+			$this->assertSame($this->hrefs($standIn['_links']), $this->hrefs($example['_links']), $name);
+			$this->assertEqualsCanonicalizing(array_keys($standIn['_templates']), array_keys($example['_templates']), $name);
+			foreach ($standIn['_templates'] as $form => $template) {
+				$this->assertSame([$template['method'], $template['target']], [$example['_templates'][$form]['method'], $example['_templates'][$form]['target']], $name . ' ' . $form);
+				$this->assertEqualsCanonicalizing(array_column($template['properties'], 'name'), array_column($example['_templates'][$form]['properties'], 'name'), $name . ' ' . $form);
+			}
+
+			$this->assertArrayHasKey($name, $orders);
+			$order = $orders[$name];
+			$standIn = Api::order($order['order_id'], onion: $onion);
+			$this->assertSame([], array_diff(array_keys($standIn), array_keys($order)), $name);
+			$dashboard = $order['_links']['mk:dashboard-order']['href'];
+			$this->assertMatchesRegularExpression('#\A/stores/[^/]+/orders/' . preg_quote($order['order_id'], '#') . '\z#', $dashboard, $name);
+			$standIn['_links']['mk:dashboard-order']['href'] = $dashboard;
+			$this->assertSame($this->hrefs($standIn['_links']), $this->hrefs($order['_links']), $name);
+			$this->assertSame($order['order_id'], $reads[$name]['order_id'], 'the order made is the one read: ' . $name);
+			$this->assertSame($this->hrefs($order['_links']), $this->hrefs($reads[$name]['_links']), $name);
+		}
+
+		$this->assertSame('/api/v1', $connections['no-key']['api']);
+		$this->assertArrayNotHasKey('onion_api', $connections['no-key']);
+		$this->assertSame(Api::ONION . '/api/v1', $connections['no-key-with-onion']['onion_api']);
+		foreach ($connections as $name => $example) {
+			$this->assertSame([], array_diff(['public_key', 'secret_token', 'api', 'webhook_signing_secret'], array_keys($example)), $name);
+			$this->assertStringStartsWith('pk_', $example['public_key']);
+			$this->assertStringStartsWith('sk_', $example['secret_token']);
 		}
 	}
 
-	/** @param array<string, mixed> $content one media type's content @return list<array<string, mixed>> */
+	/** @param array<string, mixed> $content one media type's content @return array<string, array<string, mixed>> its examples' values, by name */
 	private function examples(array $content): array {
-		$out = isset($content['example']) ? [$content['example']] : [];
-		foreach ($content['examples'] ?? [] as $example) {
-			if (is_array($example['value'] ?? null)) {
-				$out[] = $example['value'];
-			}
+		$out = [];
+		foreach ($content['examples'] ?? [] as $name => $example) {
+			$out[$name] = $example['value'];
 		}
+
+		return $out;
+	}
+
+	/** @param array<string, mixed> $links @return array<string, string> each link's href, by relation (curies aside) */
+	private function hrefs(array $links): array {
+		unset($links['curies']);
+		$out = array_map(static fn(array $link): string => $link['href'], $links);
+		ksort($out);
 
 		return $out;
 	}
