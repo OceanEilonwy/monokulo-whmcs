@@ -10,9 +10,10 @@ use Illuminate\Database\Schema\Blueprint;
  * The gateway's own tables, through WHMCS's database (Capsule's connection).
  *
  * - `mod_monokulo_connection`: one row per host that has connected (WHMCS's
- *   System URL's host), with the API's entry the connect flow gave.
- * - `mod_monokulo_order`: each Monokulo order WHMCS created, and which
- *   invoice it pays. An invoice can have more than one: when its balance
+ *   System URL's host), with the API's entry the connect flow gave, and
+ *   the entry itself as last read, kept for as long as Monokulo says.
+ * - `mod_monokulo_order`: each Monokulo order WHMCS created, which invoice
+ *   it pays, and its page on the merchant's dashboard. An invoice can have more than one: when its balance
  *   changed after a first attempt, or an earlier one expired. The newest is
  *   the live one.
  * - `mod_monokulo_event`: webhook events already applied, so a delivery that
@@ -24,7 +25,7 @@ use Illuminate\Database\Schema\Blueprint;
  * Deactivating the gateway keeps these tables: invoices' payments refer to
  * them, and activating it again picks the connection back up.
  */
-final class Repository {
+final class Repository implements EntryCache {
 	public const NONCE_TTL_SECONDS = 600;
 
 	public function __construct(
@@ -43,6 +44,10 @@ final class Repository {
 				$t->string('secret_token', 255);
 				$t->string('webhook_secret', 255);
 				$t->integer('connected_at');
+				$t->string('onion_api', 255)->nullable();
+				$t->mediumText('entry')->nullable();
+				$t->string('entry_etag', 255)->nullable();
+				$t->integer('entry_expires_at')->nullable();
 			},
 			'mod_monokulo_order' => static function (Blueprint $t): void {
 				$t->increments('seq');
@@ -54,6 +59,7 @@ final class Repository {
 				$t->integer('attempt');
 				$t->boolean('expired')->default(false);
 				$t->integer('created_at');
+				$t->string('dashboard_url', 512)->nullable();
 			},
 			'mod_monokulo_event' => static function (Blueprint $t): void {
 				$t->string('event_id', 64)->primary();
@@ -76,49 +82,51 @@ final class Repository {
 				$schema->create($name, $columns);
 			}
 		}
-		// A connection made before the API's entry was handed over has the
-		// old `endpoint` instead: the entry is left empty (connection() fills
-		// it in from the Monokulo address) and the endpoint goes.
-		if ($schema->hasColumn('mod_monokulo_connection', 'endpoint')) {
-			$schema->table('mod_monokulo_connection', static function (Blueprint $t): void {
-				$t->string('api', 255)->nullable();
-			});
-			$schema->table('mod_monokulo_connection', static function (Blueprint $t): void {
-				$t->dropColumn('endpoint');
-			});
+		// Added in 0.2.0: Monokulo's onion entry and the kept
+		// API entry on the connection, and the order's dashboard page. A shop
+		// connected then has none of them until it reads the entry (onion_api
+		// then comes from the entry's mk:onion-api) or makes an order.
+		$added = [
+			'mod_monokulo_connection' => [
+				'onion_api'        => static fn(Blueprint $t) => $t->string('onion_api', 255)->nullable(),
+				'entry'            => static fn(Blueprint $t) => $t->mediumText('entry')->nullable(),
+				'entry_etag'       => static fn(Blueprint $t) => $t->string('entry_etag', 255)->nullable(),
+				'entry_expires_at' => static fn(Blueprint $t) => $t->integer('entry_expires_at')->nullable(),
+			],
+			'mod_monokulo_order' => [
+				'dashboard_url' => static fn(Blueprint $t) => $t->string('dashboard_url', 512)->nullable(),
+			],
+		];
+		foreach ($added as $table => $columns) {
+			foreach ($columns as $column => $add) {
+				if (!$schema->hasColumn($table, $column)) {
+					$schema->table($table, static function (Blueprint $t) use ($add): void {
+						$add($t);
+					});
+				}
+			}
 		}
 	}
 
-	/**
-	 * The host's connection, or null before it has connected. One made
-	 * before the API's entry was handed over gets `<address>/api/v1`, the
-	 * entry on the Monokulo address the gateway's settings have, so it keeps
-	 * working without connecting again (null when there's no such address).
-	 */
-	public function connection(string $host, string $address): ?Connection {
+	/** The host's connection, or null before it has connected. */
+	public function connection(string $host): ?Connection {
 		$row = $this->db->table('mod_monokulo_connection')->where('host', $host)->first();
-		if (!$row) {
+		if (!$row || (string)$row->api === '') {
 			return null;
-		}
-		$api = (string)($row->api ?? '');
-		if ($api === '') {
-			$address = ConnectLink::address($address);
-			if ($address === null) {
-				return null;
-			}
-			$api = $address . '/api/v1';
 		}
 
 		return new Connection(
 			$row->host,
-			$api,
+			$row->api,
 			$row->public_key,
 			$row->secret_token,
 			$row->webhook_secret,
 			(int)$row->connected_at,
+			$row->onion_api !== null && $row->onion_api !== '' ? $row->onion_api : null,
 		);
 	}
 
+	/** Keeps a new connection: new keys, so the entry kept for the old ones goes. */
 	public function saveConnection(Connection $c): void {
 		$this->db->table('mod_monokulo_connection')->updateOrInsert(['host' => $c->host], [
 			'api'                => $c->api,
@@ -126,6 +134,33 @@ final class Repository {
 			'secret_token'       => $c->secretToken,
 			'webhook_secret'     => $c->webhookSecret,
 			'connected_at'       => $c->connectedAt,
+			'onion_api'          => $c->onionApi,
+			'entry'              => null,
+			'entry_etag'         => null,
+			'entry_expires_at'   => null,
+		]);
+	}
+
+	public function entry(Connection $connection): ?Entry {
+		$row = $this->db->table('mod_monokulo_connection')->where('host', $connection->host)->where('secret_token', $connection->secretToken)->first(['entry', 'entry_etag', 'entry_expires_at']);
+		$body = $row && $row->entry !== null ? json_decode($row->entry, true) : null;
+		if (!is_array($body)) {
+			return null;
+		}
+
+		return new Entry($connection->api, $body, (string)$row->entry_etag, (int)$row->entry_expires_at);
+	}
+
+	/**
+	 * Keeps the entry the connection's key was given, and what it says of
+	 * Monokulo's onion address (`mk:onion-api`: there while it has one).
+	 */
+	public function keepEntry(Connection $connection, Entry $entry): void {
+		$this->db->table('mod_monokulo_connection')->where('host', $connection->host)->where('secret_token', $connection->secretToken)->update([
+			'entry'            => json_encode($entry->body),
+			'entry_etag'       => $entry->etag,
+			'entry_expires_at' => $entry->expiresAt,
+			'onion_api'        => $entry->link('mk:onion-api'),
 		]);
 	}
 
@@ -177,9 +212,10 @@ final class Repository {
 	 * Remembers a Monokulo order for an invoice. False when it was already
 	 * known (the client pressed Pay with Monero again and got the same order).
 	 */
-	public function recordOrder(string $monokuloOrderId, int $invoiceId, string $host, string $amount, string $currency, int $attempt, int $now): bool {
+	public function recordOrder(Order $order, int $invoiceId, string $host, string $amount, string $currency, int $attempt, int $now): bool {
 		return $this->db->table('mod_monokulo_order')->insertOrIgnore([
-			'monokulo_order_id' => $monokuloOrderId,
+			'monokulo_order_id' => $order->id,
+			'dashboard_url'     => $order->dashboardUrl,
 			'invoice_id'        => $invoiceId,
 			'host'              => $host,
 			'amount'            => $amount,
@@ -202,10 +238,11 @@ final class Repository {
 	}
 
 	/**
-	 * The invoice a Monokulo order pays, the amount it was for, and whether
-	 * it is that invoice's newest Monokulo order.
+	 * The invoice a Monokulo order pays, the amount it was for, whether it
+	 * is that invoice's newest Monokulo order, and its page on the merchant's
+	 * dashboard (null for an order made before 0.2.0 kept it).
 	 *
-	 * @return array{invoice_id: int, amount: string, currency: string, latest: bool}|null
+	 * @return array{invoice_id: int, amount: string, currency: string, latest: bool, dashboard_url: ?string}|null
 	 */
 	public function findOrder(string $monokuloOrderId): ?array {
 		$row = $this->db->table('mod_monokulo_order')->where('monokulo_order_id', $monokuloOrderId)->first();
@@ -218,7 +255,8 @@ final class Repository {
 			'invoice_id' => (int)$row->invoice_id,
 			'amount'     => $row->amount,
 			'currency'   => $row->currency,
-			'latest'     => $newest === $row->monokulo_order_id,
+			'latest'        => $newest === $row->monokulo_order_id,
+			'dashboard_url' => $row->dashboard_url !== null && $row->dashboard_url !== '' ? $row->dashboard_url : null,
 		];
 	}
 

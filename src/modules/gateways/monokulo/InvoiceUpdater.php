@@ -26,9 +26,9 @@ final class InvoiceUpdater {
 	}
 
 	/**
-	 * @param array{invoice_id: int, amount: string, currency: string, latest: bool} $order the Monokulo order, as Repository::findOrder has it
+	 * @param array{invoice_id: int, amount: string, currency: string, latest: bool, dashboard_url: ?string} $order the Monokulo order, as Repository::findOrder has it
 	 */
-	public function apply(array $order, Decision $decision, WebhookEvent $event, Connection $connection): void {
+	public function apply(array $order, Decision $decision, WebhookEvent $event): void {
 		$invoiceId = $order['invoice_id'];
 		$invoice = $this->whmcs->invoice($invoiceId);
 		if (!$invoice) {
@@ -73,8 +73,8 @@ final class InvoiceUpdater {
 		if ($event->txid) {
 			$data['txid'] = $event->txid;
 		}
-		if ($event->storeId) {
-			$data['in_monokulo'] = $connection->dashboardOrderUrl($event->storeId, $event->orderId);
+		if ($order['dashboard_url'] !== null) {
+			$data['in_monokulo'] = $order['dashboard_url'];
 		}
 		$this->whmcs->gatewayLog($data, $result);
 	}

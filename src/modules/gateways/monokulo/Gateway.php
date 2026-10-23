@@ -9,7 +9,7 @@ namespace Monokulo\Whmcs;
  * the check on saving them, and the Pay with Monero link on an invoice.
  */
 final class Gateway {
-	private const CONNECT_ERRORS = ['address', 'host', 'finish', 'unavailable', 'unreachable'];
+	private const CONNECT_ERRORS = ['address', 'host', 'finish', 'unavailable', 'busy', 'unreachable'];
 
 	public function __construct(
 		private readonly Whmcs $whmcs,
@@ -77,7 +77,8 @@ final class Gateway {
 	/**
 	 * The invoice's Pay with Monero button, on the invoice page and in the
 	 * invoice email. It goes through the callback, which creates the
-	 * Monokulo order only when pressed.
+	 * Monokulo order only when pressed. On the shop's onion address, the
+	 * link is there too, so the client stays on Tor.
 	 *
 	 * @param array<string, mixed> $params WHMCS's invoice and gateway parameters
 	 */
@@ -85,11 +86,11 @@ final class Gateway {
 		$repository = new Repository($this->whmcs->db());
 		$repository->install();
 		$systemUrl = $this->whmcs->systemUrl();
-		$connection = $repository->connection(ConnectLink::host($systemUrl), $this->whmcs->setting('address'));
+		$connection = $repository->connection(ConnectLink::host($systemUrl));
 		if (!$connection) {
 			return '<p>' . Text::html('text_unavailable') . '</p>';
 		}
-		$url = Links::pay($systemUrl, $repository->linkKey(), (int)$params['invoiceid']);
+		$url = Links::pay(Links::shopUrl($systemUrl, $this->whmcs->requestOrigin()), $repository->linkKey(), (int)$params['invoiceid']);
 
 		return '<a href="' . Text::escape($url) . '" class="btn btn-success">' . Text::html('button_pay') . '</a>'
 			. '<p><small>' . Text::html('text_pay') . '</small></p>';
@@ -100,7 +101,7 @@ final class Gateway {
 		$repository = new Repository($this->whmcs->db());
 		$repository->install();
 		$systemUrl = $this->whmcs->systemUrl();
-		$connection = $repository->connection(ConnectLink::host($systemUrl), $this->whmcs->setting('address'));
+		$connection = $repository->connection(ConnectLink::host($systemUrl));
 		$lines = [];
 
 		if (isset($query['monokulo_connected'])) {
@@ -115,6 +116,9 @@ final class Gateway {
 			$lines[] = Text::html('text_not_connected');
 		} else {
 			$lines[] = Text::escape(sprintf(Text::get('text_connected_as'), $connection->publicKey, date('Y-m-d H:i', $connection->connectedAt)));
+			$lines[] = $connection->onionApi !== null
+				? Text::escape(sprintf(Text::get('text_onion'), (string)parse_url($connection->onionApi, PHP_URL_HOST)))
+				: Text::html('text_no_onion');
 		}
 
 		if (ConnectLink::address($this->whmcs->setting('address')) === null) {

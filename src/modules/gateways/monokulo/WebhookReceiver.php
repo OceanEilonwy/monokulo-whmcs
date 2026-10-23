@@ -53,7 +53,7 @@ final class WebhookReceiver {
 			return 200;
 		}
 		try {
-			$this->updater->apply($order, $decision, $event, $connection);
+			$this->updater->apply($order, $decision, $event);
 		} catch (\Throwable $e) {
 			$this->repository->releaseEvent($event->eventId);
 			$this->log->error(sprintf('Webhook %s for invoice %d could not be applied: %s', $event->eventId, $order['invoice_id'], $e->getMessage()));

@@ -23,7 +23,7 @@ final class ApiError extends \RuntimeException {
 
 	/**
 	 * The error a failed answer carries: a problem+json body's `detail` (or
-	 * its `title`) and `type`, a connect error's `{"error": …}`, else the body.
+	 * its `title`) and `type`, else the body.
 	 */
 	public static function from(int $status, string $body): self {
 		$data = json_decode($body, true);
@@ -32,9 +32,6 @@ final class ApiError extends \RuntimeException {
 			$slug = basename((string)parse_url($data['type'], PHP_URL_PATH));
 
 			return new self($status, $detail, $slug, $data['type']);
-		}
-		if (is_array($data) && isset($data['error']) && is_string($data['error'])) {
-			return new self($status, $data['error']);
 		}
 
 		return new self($status, $body);

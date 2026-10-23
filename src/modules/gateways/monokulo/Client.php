@@ -5,30 +5,41 @@ namespace Monokulo\Whmcs;
 
 /**
  * The calls the shop's server makes to Monokulo: redeem a connect token,
- * create an order, and (when the merchant turned it on) forward its warnings
+ * create an order, and (when the merchant turned it on) send its warnings
  * and errors.
  *
  * Orders go through Monokulo's HTTP API (HAL-FORMS): the store's secret key
- * in `Authorization: Bearer` picks the store, the entry the connect flow
- * gave says where its `create-order` form posts, and the order's `mk:checkout`
- * link is where the client pays. Errors come back as
+ * in `Authorization: Bearer` picks the store, and the API's entry, which
+ * the connect flow gave, offers the forms it may use (`create-order`,
+ * `send-logs`). The entry is kept as its `Cache-Control` says (see
+ * EntryCache), so making an order is usually one request; it is read again
+ * when it has expired (with `If-None-Match`), and at once when a form from
+ * a kept copy is refused with 401, 404 or 405. Every address is a link or
+ * form target, resolved against the URL it came from: nothing is built
+ * here but the connect flow's own. Errors come back as
  * `application/problem+json` (ApiError).
  */
 final class Client {
 	public const HAL_FORMS = 'application/prs.hal-forms+json';
 
+	/** A form from a kept entry answering one of these means: read the entry again, then retry. */
+	private const STALE = [401, 404, 405];
+
 	public function __construct(
 		private readonly Trace $trace,
+		private readonly EntryCache $cache,
+		private readonly int $now,
 	) {
 	}
 
 	/**
 	 * `POST {address}/plugins/connect/whmcs/finish`: redeems the single-use token
 	 * the connect flow handed back, registers `webhookUrl`, and returns the
-	 * store's credentials, with `api` (the API's entry) resolved against
-	 * `address`.
+	 * store's credentials, with `api` (the API's entry) resolved against the
+	 * address it was called at, and `onion_api` (the entry on Monokulo's
+	 * onion address) when Monokulo has one.
 	 *
-	 * @return array{public_key: string, secret_token: string, api: string, webhook_signing_secret: string}
+	 * @return array{public_key: string, secret_token: string, api: string, onion_api: ?string, webhook_signing_secret: string}
 	 *
 	 * @throws ApiError|TransportError
 	 */
@@ -45,47 +56,49 @@ final class Client {
 				throw new ApiError($response->status, 'missing ' . $key . ': ' . $response->body);
 			}
 		}
+		$onion = $data['onion_api'] ?? null;
 
 		return [
 			'public_key'             => $data['public_key'],
 			'secret_token'           => $data['secret_token'],
 			'api'                    => Url::resolve($url, $data['api']),
+			'onion_api'              => is_string($onion) && $onion !== '' ? Url::resolve($url, $onion) : null,
 			'webhook_signing_secret' => $data['webhook_signing_secret'],
 		];
 	}
 
 	/**
-	 * Creates an order: reads the API's entry with the store's secret key,
-	 * follows its `create-order` form, and returns the order with its
-	 * checkout link.
+	 * Creates an order with the entry's `create-order` form, and returns it
+	 * with its links.
 	 *
 	 * @param array<string, mixed> $body see OrderRequest
 	 *
 	 * @throws ApiError|TransportError
 	 */
 	public function createOrder(Connection $connection, array $body): Order {
-		$entry = $this->decode($this->request('GET', $connection->api, $this->headers(null, $connection), null, 30), [200]);
-		$form = $entry['_templates']['create-order'] ?? null;
-		if (!is_array($form) || !is_string($form['target'] ?? null) || $form['target'] === '') {
-			throw new ApiError(200, 'the API entry has no create-order form for this key: ' . (string)json_encode($entry));
+		[$response, $target] = $this->submit($connection, 'create-order', $body, 30);
+		if ($response === null) {
+			throw new ApiError(200, 'the API entry offers this key no create-order form');
 		}
-		$method = is_string($form['method'] ?? null) ? strtoupper($form['method']) : 'POST';
-		$target = Url::resolve($connection->api, $form['target']);
-		$response = $this->request($method, $target, $this->headers('application/json', $connection), (string)json_encode($body), 30);
 		$order = $this->decode($response, [200, 201]);
 		$id = $order['order_id'] ?? null;
-		$checkout = $order['_links']['mk:checkout']['href'] ?? null;
-		if (!is_string($id) || $id === '' || !is_string($checkout) || $checkout === '') {
+		$link = static function (string $rel) use ($order, $target): ?string {
+			$href = $order['_links'][$rel]['href'] ?? null;
+
+			return is_string($href) && $href !== '' ? Url::resolve($target, $href) : null;
+		};
+		$checkout = $link('mk:checkout');
+		if (!is_string($id) || $id === '' || $checkout === null) {
 			throw new ApiError($response->status, 'no order_id or mk:checkout link: ' . $response->body);
 		}
-		$self = $response->headers['location'] ?? $order['_links']['self']['href'] ?? $target;
 
-		return new Order($id, Url::resolve(Url::resolve($target, (string)$self), $checkout));
+		return new Order($id, $checkout, $link('mk:onion-checkout'), $link('mk:dashboard-order'));
 	}
 
 	/**
-	 * `POST {api}/logs`: the shop's warnings and errors, for the merchant to
-	 * read in Monokulo. Best effort: a failure here is ignored.
+	 * The shop's warnings and errors, for the merchant to read in Monokulo,
+	 * through the entry's `send-logs` form. Best effort: nothing is sent when
+	 * the key isn't offered the form, and a failure here is ignored.
 	 *
 	 * @param list<array{level: string, message: string, trace_id: string}> $entries
 	 */
@@ -94,10 +107,66 @@ final class Client {
 			return;
 		}
 		try {
-			$this->request('POST', $connection->logsUrl(), $this->headers('application/json', $connection), (string)json_encode(['entries' => $entries]), 3);
-		} catch (TransportError) {
+			$this->submit($connection, 'send-logs', ['entries' => $entries], 3);
+		} catch (ApiError|TransportError) {
 			// Nothing to do: these are reports about other failures.
 		}
+	}
+
+	/**
+	 * Sends `body` with the entry's form `name`: its answer and the URL it
+	 * came from, or [null, ''] when the key isn't offered that form. A form
+	 * from a kept entry that is refused (401, 404, 405), or missing, is tried
+	 * once more from the entry read again.
+	 *
+	 * @param array<string, mixed> $body
+	 *
+	 * @return array{0: ?HttpResponse, 1: string}
+	 *
+	 * @throws ApiError|TransportError
+	 */
+	private function submit(Connection $connection, string $name, array $body, int $timeoutSeconds): array {
+		$entry = $this->entry($connection, $timeoutSeconds, false);
+		while (true) {
+			$form = $entry->form($name);
+			if ($form !== null) {
+				$response = $this->request($form['method'], $form['target'], $this->headers('application/json', $connection), (string)json_encode($body), $timeoutSeconds);
+				if (!in_array($response->status, self::STALE, true) || $entry->fresh) {
+					return [$response, $form['target']];
+				}
+			} elseif ($entry->fresh) {
+				return [null, ''];
+			}
+			$entry = $this->entry($connection, $timeoutSeconds, true);
+		}
+	}
+
+	/**
+	 * The API's entry for this connection's key: the kept copy while it
+	 * holds, else read (with `If-None-Match` when there is a copy, unless
+	 * `again`, which reads it whole) and kept.
+	 *
+	 * @throws ApiError|TransportError
+	 */
+	private function entry(Connection $connection, int $timeoutSeconds, bool $again): Entry {
+		$kept = $again ? null : $this->cache->entry($connection);
+		if ($kept && $kept->expiresAt > $this->now) {
+			return $kept;
+		}
+		$headers = $this->headers(null, $connection);
+		if ($kept && $kept->etag !== '') {
+			$headers['If-None-Match'] = $kept->etag;
+		}
+		$response = $this->request('GET', $connection->api, $headers, null, $timeoutSeconds);
+		$expires = $this->now + Entry::maxAge($response->headers['cache-control'] ?? '');
+		if ($kept && $response->status === 304) {
+			$entry = $kept->renewed($expires);
+		} else {
+			$entry = new Entry($connection->api, $this->decode($response, [200]), $response->headers['etag'] ?? '', $expires, true);
+		}
+		$this->cache->keepEntry($connection, $entry);
+
+		return $entry;
 	}
 
 	/**
@@ -125,7 +194,9 @@ final class Client {
 			CURLOPT_HEADERFUNCTION => static function ($curl, string $line) use (&$received): int {
 				$parts = explode(':', $line, 2);
 				if (count($parts) === 2) {
-					$received[strtolower(trim($parts[0]))] = trim($parts[1]);
+					$name = strtolower(trim($parts[0]));
+					// A header sent more than once (Vary) is one list.
+					$received[$name] = isset($received[$name]) ? $received[$name] . ', ' . trim($parts[1]) : trim($parts[1]);
 				}
 
 				return strlen($line);

@@ -29,6 +29,11 @@ final class Whmcs {
 		return rtrim($url, '/') . '/';
 	}
 
+	/** Where this request came in (Request::originFromGlobals). */
+	public function requestOrigin(): string {
+		return Request::originFromGlobals();
+	}
+
 	/** One of the gateway's settings, as saved on its settings page. */
 	public function setting(string $name): string {
 		return (string)Capsule::table('tblpaymentgateways')->where('gateway', Plugin::MODULE)->where('setting', $name)->value('value');

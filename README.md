@@ -53,18 +53,45 @@ replaces the keys (Monokulo replaces its webhook too).
 
 Connecting hands WHMCS the store's keys and the entry of Monokulo's
 [HTTP API](https://docs.monokulo.com/api/) (`/api/v1` on your Monokulo's
-address). WHMCS's server calls Monokulo with the store's secret key
-(`Authorization: Bearer sk_…`), which picks the store: it reads the entry,
-creates each order with the entry's `create-order` form, and sends the
-client to the order's checkout link (`/checkout/<order id>`). When
-**Send errors to Monokulo** is on, warnings and errors go to the entry's
-`logs`. Monokulo's refusals (`application/problem+json`) are in the
-Activity Log with their reason and a link to the problem's page.
+address, under its path if it is served under one), and, when your
+Monokulo has an onion address, the same entry there. WHMCS's server calls
+Monokulo with the store's secret key (`Authorization: Bearer sk_…`), which
+picks the store. Every address it calls is a link or form from the entry:
+it creates each order with the entry's `create-order` form and sends the
+client to the order's checkout link. It keeps the entry for as long as
+Monokulo says (an hour), so a client's Pay with Monero is usually one
+request; it asks again when that is up (cheaply: Monokulo answers *not
+modified* while it's the same), and at once when Monokulo refuses a form
+from it. When **Send errors to Monokulo** is on, warnings and errors go to
+the entry's `send-logs` form. Monokulo's refusals
+(`application/problem+json`) are in the Activity Log with their reason and
+a link to the problem's page.
 
-**Upgrading** from a version that connected before the API's entry was
-handed over: nothing to do. The gateway keeps the store's keys and uses
-`/api/v1` on the saved **Monokulo address**, so keep that address as it
-was when you connected (or connect again).
+A Monokulo served under a path (`https://example.com/monokulo`) works the
+same: save that as the **Monokulo address**.
+
+### Upgrading
+
+From 0.1.0: nothing to do, the connection keeps working without
+connecting again. The gateway adds its new columns the first time it runs.
+Until the next client pays, the settings page says your Monokulo has no
+onion address even if it has one: paying reads the API's entry, which says
+where it is. Orders made before the upgrade have no *View in Monokulo*
+link in the gateway log (WHMCS didn't keep it then); new ones do.
+
+## Tor
+
+If your WHMCS is also on a `.onion` address, clients who browse it stay on
+Tor: the invoice's Pay with Monero button is on the onion address, and
+it sends them to the order's checkout on your Monokulo's onion address,
+never to its web address. Your Monokulo needs an onion address for that
+(Tor inside it, or an external tor): the gateway's settings say whether it
+has one. Without one, a client on Tor is told Monero payments can't be
+made over Tor here yet, and the Activity Log says why; clients on your web
+address pay as usual.
+
+WHMCS's own server always reaches Monokulo at its web address; only the
+client's browser goes over Tor.
 
 ## What the client sees
 
@@ -96,7 +123,7 @@ account).
 | (Pay with Monero pressed) | The client was sent to pay | Unpaid | Sent to pay, with the payment link |
 | `order.unconfirmed`, `order.confirming` | A payment was seen; waiting for confirmations | Unpaid | Payment seen |
 | `order.partial` | Less than the amount due arrived (underpaid) | Unpaid | Part paid |
-| `order.paid` | Paid in full | Payment added (the Monokulo order id is its transaction id): **Paid** | Paid, with a link to the order in Monokulo |
+| `order.paid` | Paid in full | Payment added (the Monokulo order id is its transaction id): **Paid** | Paid, with a link to the order in Monokulo (its `mk:dashboard-order`) |
 | `order.overpaid` | Paid with more than was due | As paid: the amount due is added | Overpaid: the excess isn't refunded automatically |
 | `order.expired` | The payment window closed without full payment | Unpaid; Pay with Monero starts a new Monokulo order | Expired: any funds received stay at the address |
 | `order.double_spend_detected` | A payment was double-spent and no longer counts | unchanged | Double spend: fraud alert (the status change, if any, comes as its own event) |
@@ -179,7 +206,7 @@ scripts/test up          # build and start it (PHP_VERSION=8.1|8.2|8.3|8.4, defa
 scripts/test all         # build the zip, unzip it into the stand-in, run every suite
 scripts/test module      # one suite: unit, module or http (extra args go to PHPUnit)
 COVERAGE=1 scripts/test all   # and coverage/summary.txt, coverage/html/
-scripts/smoke            # against a real Monokulo (MONOKULO_BIN=path or MONOKULO_IMAGE=image)
+scripts/smoke            # against a real Monokulo (MONOKULO_BIN=path or MONOKULO_IMAGE=image; MONOKULO_OPENAPI=its OpenAPI with examples)
 scripts/test down
 ```
 
@@ -189,12 +216,18 @@ scripts/test down
   the stand-in WHMCS and a stand-in Monokulo.
 - **http**: real HTTP to the stand-in's web server, through the files the
   zip installs: webhooks, the settings page, connecting, paying.
-- **smoke**: a fresh Monokulo (`docker/monokulo-smoke.toml`): sign up, add
-  a watch-only wallet, connect, then a client's Pay with Monero lands on
-  the Monokulo checkout, and the order, read through the API, is pending.
-  Nothing is paid. It also checks the stand-in Monokulo's API answers
-  (`tests/Support/Api.php`) against the real one's OpenAPI document
-  (`/api/v1/openapi.json`).
+- **smoke**: a fresh Monokulo (`docker/monokulo-smoke.toml`, with an
+  onion address and a stand-in for its exchange rates): sign up, add a
+  watch-only wallet, connect, then a client's Pay with Monero lands on the
+  Monokulo checkout, a client on the shop's onion address on the onion
+  checkout, the order's dashboard page opens, and the kept entry is used
+  and then revalidated. Nothing is paid. `scripts/smoke` runs it twice:
+  with Monokulo on its own address, then served under a path through a
+  prefix-stripping proxy (`tests/Support/prefix-proxy.php`). It also
+  checks the stand-in Monokulo's answers (`tests/Support/Api.php`) against
+  the real API and its OpenAPI document (`/api/v1/openapi.json`), and,
+  with `MONOKULO_OPENAPI` (written at the pinned commit with
+  `cargo xtask api openapi --out FILE`), against its recorded examples.
 
 Webhook tests use Monokulo's published test vectors, vendored in
 `tests/vectors` and pinned to a monokulo commit (`tests/vectors/PIN`).
@@ -226,6 +259,9 @@ release:
       invoice turns Paid with the Monokulo order id as transaction id,
       the payment confirmation email is sent, and a product's provisioning
       runs.
+- [ ] With WHMCS also on a `.onion` address (in Tor Browser): the
+      invoice's Pay with Monero stays on it and opens the Monokulo
+      checkout on its onion address.
 - [ ] A webhook sent again by Monokulo adds nothing.
 - [ ] Warnings appear in the Activity Log; with module debug logging on,
       the rest in the Module Log.

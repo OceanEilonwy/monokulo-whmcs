@@ -46,6 +46,30 @@ final class Links {
 		return $t <= $now && $now - $t <= self::CONNECT_TTL_SECONDS && hash_equals(self::sign($key, 'connect:' . $t . ':' . $return), $sig);
 	}
 
+	/**
+	 * Whether an origin (`http://shop….onion`) is an onion address: a client
+	 * there is on Tor, and must stay on it.
+	 */
+	public static function isOnion(string $origin): bool {
+		$host = parse_url($origin, PHP_URL_HOST);
+
+		return is_string($host) && str_ends_with(strtolower(rtrim($host, '.')), '.onion');
+	}
+
+	/**
+	 * Where the shop is for a client who came in at `origin`: the System URL,
+	 * or, for a client on the shop's onion address, the same path there (a
+	 * client on Tor is never sent to the shop's web address).
+	 */
+	public static function shopUrl(string $systemUrl, string $origin): string {
+		if (!self::isOnion($origin)) {
+			return $systemUrl;
+		}
+		$path = parse_url($systemUrl, PHP_URL_PATH);
+
+		return rtrim($origin, '/') . (is_string($path) && $path !== '' ? $path : '/');
+	}
+
 	/** `url` with `query` added to its query string. */
 	public static function with(string $url, string $query): string {
 		return $url . (str_contains($url, '?') ? '&' : '?') . $query;

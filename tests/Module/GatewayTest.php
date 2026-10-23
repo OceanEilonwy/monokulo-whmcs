@@ -3,6 +3,7 @@ namespace Monokulo\Whmcs\Tests\Module;
 
 use Monokulo\Whmcs\Links;
 use Monokulo\Whmcs\Repository;
+use Monokulo\Whmcs\Tests\Support\Api;
 use Monokulo\Whmcs\Tests\Support\Calls;
 use Monokulo\Whmcs\Tests\Support\Whmcs;
 use Monokulo\Whmcs\Tests\Support\WhmcsTestCase;
@@ -97,6 +98,18 @@ final class GatewayTest extends WhmcsTestCase {
 
 		$this->assertStringContainsString('Connected as pk_test since 2025-10-09', $notes);
 		$this->assertStringContainsString('>Connect again<', $notes);
+		$this->assertStringContainsString('Your Monokulo has no onion address', $notes);
+	}
+
+	/** With Monokulo's onion address, the settings say where Tor clients pay. */
+	public function test_connected_with_an_onion_address_says_so(): void {
+		Whmcs::connect('https://pay.example.com', 'whsec');
+		Capsule::table('mod_monokulo_connection')->update(['onion_api' => Api::ONION . '/api/v1']);
+
+		$notes = $this->notes();
+
+		$this->assertStringContainsString('pay on your Monokulo&#039;s onion address, ' . parse_url(Api::ONION, PHP_URL_HOST), $notes);
+		$this->assertStringNotContainsString('no onion address', $notes);
 	}
 
 	/** Another System URL is another Monokulo store: not connected until connected from there. */
@@ -113,6 +126,7 @@ final class GatewayTest extends WhmcsTestCase {
 			'host'        => [['monokulo_connect_error' => 'host'], 'came back to a different address'],
 			'finish'      => [['monokulo_connect_error' => 'finish'], 'did not hand over the store\'s keys'],
 			'unavailable' => [['monokulo_connect_error' => 'unavailable'], 'its operator has not set its public address'],
+			'busy'        => [['monokulo_connect_error' => 'busy'], 'Your Monokulo is busy right now'],
 			'unreachable' => [['monokulo_connect_error' => 'unreachable'], 'could not be reached from this server'],
 		];
 	}
@@ -169,6 +183,21 @@ final class GatewayTest extends WhmcsTestCase {
 		$this->assertTrue(Links::payIsGenuine((new Repository(Capsule::connection()))->linkKey(), $invoice, self::query($url)['sig']));
 		$this->assertStringContainsString('&amp;sig=', $html, 'escaped for HTML');
 		$this->assertSame([], self::$monokulo->requests(), 'showing the button creates no Monokulo order');
+	}
+
+	/** Shown on the shop's onion address, the button stays there: a client on Tor isn't sent to the web. */
+	public function test_on_the_shops_onion_address_the_button_stays_on_it(): void {
+		Whmcs::connect('https://pay.example.com', 'whsec');
+		$invoice = Whmcs::invoice();
+		$_SERVER['HTTP_HOST'] = 'shopabcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuv.onion';
+		try {
+			$html = monokulo_link(['invoiceid' => $invoice] + getGatewayVariables('monokulo'));
+		} finally {
+			unset($_SERVER['HTTP_HOST']);
+		}
+
+		preg_match('#<a href="([^"]+)"#', $html, $m);
+		$this->assertStringStartsWith('http://shopabcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuv.onion/modules/gateways/callback/monokulo.php?action=pay&invoice=' . $invoice . '&sig=', html_entity_decode($m[1], ENT_QUOTES));
 	}
 
 	/** One key per install, kept: links in invoice emails sent before still work. */

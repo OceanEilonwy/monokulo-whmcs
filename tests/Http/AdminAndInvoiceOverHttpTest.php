@@ -106,6 +106,27 @@ final class AdminAndInvoiceOverHttpTest extends TestCase {
 		$this->assertSame('25', json_decode(self::$monokulo->requests()[1]['body'], true)['amount']);
 	}
 
+	/**
+	 * The shop on its onion address (the request's Host): the invoice's
+	 * button stays on it, and the client goes to the order's checkout on
+	 * Monokulo's onion address.
+	 */
+	public function test_a_client_on_the_shops_onion_address_pays_over_tor_over_http(): void {
+		Whmcs::connect(self::$monokulo->url, 'whsec');
+		$invoice = Whmcs::invoice(['Hosting' => '25.00'], 'EUR');
+		\Monokulo\Whmcs\Tests\Support\Api::serve(self::$monokulo, 'order_tor', onion: true);
+		$onion = ['Host' => 'shopabcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuv.onion'];
+
+		$page = $this->browser->get(Whmcs::URL . 'viewinvoice.php?id=' . $invoice, $onion);
+		preg_match('#<a href="([^"]+)" class="btn#', $page->body, $m);
+		$link = html_entity_decode($m[1], ENT_QUOTES);
+		$this->assertStringStartsWith('http://' . $onion['Host'] . '/modules/gateways/callback/monokulo.php?action=pay&', $link);
+		$pay = $this->browser->get(str_replace('http://' . $onion['Host'] . '/', Whmcs::URL, $link), $onion);
+
+		$this->assertSame(303, $pay->status);
+		$this->assertSame(\Monokulo\Whmcs\Tests\Support\Api::ONION . '/checkout/order_tor', $pay->location());
+	}
+
 	public function test_a_tampered_pay_link_is_refused_over_http(): void {
 		Whmcs::connect(self::$monokulo->url, 'whsec');
 		$invoice = Whmcs::invoice();

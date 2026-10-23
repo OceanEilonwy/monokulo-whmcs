@@ -1,6 +1,7 @@
 <?php
 namespace Monokulo\Whmcs\Tests\Http;
 
+use Monokulo\Whmcs\Order;
 use Monokulo\Whmcs\Repository;
 use Monokulo\Whmcs\Tests\Support\Browser;
 use Monokulo\Whmcs\Tests\Support\Vectors;
@@ -26,7 +27,7 @@ final class WebhookOverHttpTest extends TestCase {
 		Whmcs::reset();
 		Whmcs::connect('https://pay.example.com', Vectors::secret());
 		$this->invoice = Whmcs::invoice(['Hosting' => '100.00']);
-		(new Repository(Capsule::connection()))->recordOrder(Vectors::orderId(), $this->invoice, Whmcs::HOST, '100.00', 'USD', 0, 1760000000);
+		(new Repository(Capsule::connection()))->recordOrder(new Order(Vectors::orderId(), 'https://pay.example.com/checkout/' . Vectors::orderId(), null, 'https://pay.example.com/monokulo/stores/st_1/orders/' . Vectors::orderId()), $this->invoice, Whmcs::HOST, '100.00', 'USD', 0, 1760000000);
 	}
 
 	protected function tearDown(): void {

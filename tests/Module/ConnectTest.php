@@ -4,6 +4,7 @@ namespace Monokulo\Whmcs\Tests\Module;
 use Monokulo\Whmcs\Links;
 use Monokulo\Whmcs\Plugin;
 use Monokulo\Whmcs\Repository;
+use Monokulo\Whmcs\Tests\Support\Api;
 use Monokulo\Whmcs\Tests\Support\Calls;
 use Monokulo\Whmcs\Tests\Support\FakeMonokulo;
 use Monokulo\Whmcs\Tests\Support\Whmcs;
@@ -41,7 +42,7 @@ final class ConnectTest extends WhmcsTestCase {
 	}
 
 	private function monokuloFinishes(int $status, mixed $body): void {
-		self::$monokulo->respond('POST', '/plugins/connect/whmcs/finish', $status, $body);
+		self::$monokulo->respond('POST', '/plugins/connect/whmcs/finish', $status, $body, headers: $status >= 400 ? ['Content-Type' => Api::PROBLEM] : []);
 	}
 
 	public function test_connect_sends_the_admin_to_monokulo_with_a_nonce(): void {
@@ -111,10 +112,44 @@ final class ConnectTest extends WhmcsTestCase {
 		$this->assertSame(['token' => 'tok_1', 'webhook_url' => Whmcs::CALLBACK, 'name' => 'WHMCS'], json_decode($request['body'], true));
 		$this->assertSame('whmcs/' . Plugin::VERSION, $request['headers']['monokulo-client']);
 
-		$connection = $this->repository()->connection(Whmcs::HOST, self::$monokulo->url);
+		$connection = $this->repository()->connection(Whmcs::HOST);
 		$this->assertSame([self::$monokulo->url . '/api/v1', 'pk_new', 'sk_new', 'whsec_new'], [$connection->api, $connection->publicKey, $connection->secretToken, $connection->webhookSecret]);
 		$this->assertSame(self::$monokulo->url . '/api/v1', Whmcs::rows('mod_monokulo_connection')[0]['api'], 'the entry is kept, resolved against the address');
+		$this->assertNull($connection->onionApi, 'no onion address');
 		$this->assertStringContainsString('localhost:8091 connected to Monokulo as pk_new', Whmcs::logs());
+	}
+
+	/** A Monokulo with an onion address hands over its entry there: kept with the connection. */
+	public function test_connecting_keeps_the_onion_entry(): void {
+		$this->monokuloFinishes(200, ['onion_api' => Api::ONION . '/api/v1'] + self::CREDENTIALS);
+
+		$this->get(['action' => 'return', 'token' => 'tok_1', 'nonce' => $this->nonce()]);
+
+		$this->assertSame(Api::ONION . '/api/v1', $this->repository()->connection(Whmcs::HOST)->onionApi);
+		$this->assertStringContainsString('as pk_new, on Tor at ' . Api::ONION . '/api/v1', Whmcs::logs());
+	}
+
+	/** A Monokulo under a path: /finish under it, and the entry it hands over kept with its path. */
+	public function test_connecting_to_a_monokulo_under_a_path(): void {
+		Whmcs::setting('address', self::$monokulo->url . '/monokulo/');
+		self::$monokulo->respond('POST', '/monokulo/plugins/connect/whmcs/finish', 200, ['api' => '/monokulo/api/v1'] + self::CREDENTIALS);
+
+		$response = $this->get(['action' => 'return', 'token' => 'tok_1', 'nonce' => $this->nonce()]);
+
+		$this->assertSame(self::ADMIN . '?monokulo_connected=1', $response->headers['Location']);
+		$this->assertSame(self::$monokulo->url . '/monokulo/api/v1', $this->repository()->connection(Whmcs::HOST)->api);
+	}
+
+	/** Connecting again forgets the entry kept for the old key. */
+	public function test_connecting_again_forgets_the_kept_entry(): void {
+		Whmcs::connect('https://old.example', 'whsec_old');
+		Capsule::table('mod_monokulo_connection')->update(['entry' => '{"_links":{}}', 'entry_etag' => '"x"', 'entry_expires_at' => time() + 3600, 'onion_api' => 'http://old.onion/api/v1']);
+		$this->monokuloFinishes(200, self::CREDENTIALS);
+
+		$this->get(['action' => 'return', 'token' => 'tok_1', 'nonce' => $this->nonce()]);
+
+		$row = Whmcs::rows('mod_monokulo_connection')[0];
+		$this->assertSame([null, null, null, null], [$row['entry'], $row['entry_etag'], $row['entry_expires_at'], $row['onion_api']]);
 	}
 
 	/** Connecting again replaces the credentials (Monokulo replaced its webhook too). */
@@ -124,7 +159,7 @@ final class ConnectTest extends WhmcsTestCase {
 
 		$this->get(['action' => 'return', 'token' => 'tok_1', 'nonce' => $this->nonce()]);
 
-		$this->assertSame('pk_new', $this->repository()->connection(Whmcs::HOST, self::$monokulo->url)->publicKey);
+		$this->assertSame('pk_new', $this->repository()->connection(Whmcs::HOST)->publicKey);
 		$this->assertCount(1, Whmcs::rows('mod_monokulo_connection'));
 	}
 
@@ -139,7 +174,7 @@ final class ConnectTest extends WhmcsTestCase {
 		$this->assertSame(400, $again->status);
 		$this->assertArrayNotHasKey('Location', $again->headers);
 		$this->assertStringContainsString('already been used or has expired', $again->body);
-		$this->assertNull($this->repository()->connection(Whmcs::HOST, self::$monokulo->url));
+		$this->assertNull($this->repository()->connection(Whmcs::HOST));
 		$this->assertCount(1, self::$monokulo->requests(), 'the token was not sent twice');
 	}
 
@@ -184,8 +219,10 @@ final class ConnectTest extends WhmcsTestCase {
 
 	public static function finishFailures(): array {
 		return [
-			'no public address yet' => [503, ['error' => 'no public address'], 'unavailable'],
-			'token refused'         => [401, '', 'finish'],
+			'no public address yet' => [503, Api::problem('no-public-address', 503, 'No public address', 'This Monokulo has no public address yet.'), 'unavailable'],
+			'token refused'         => [401, Api::problem('invalid-connect-code', 401, 'Unknown connect code', 'This code is unknown, used or expired.'), 'finish'],
+			'rate limited'          => [429, Api::problem('rate-limited', 429, 'Too many requests', 'Wait 30 seconds.'), 'busy'],
+			'failed after spending' => [500, Api::problem('internal', 500, 'Something went wrong', 'internal error'), 'finish'],
 			'missing secret'        => [200, ['public_key' => 'pk', 'secret_token' => 'sk', 'api' => '/api/v1'], 'finish'],
 			'missing entry'         => [200, ['public_key' => 'pk', 'secret_token' => 'sk', 'webhook_signing_secret' => 'wh'], 'finish'],
 		];
@@ -198,7 +235,7 @@ final class ConnectTest extends WhmcsTestCase {
 		$response = $this->get(['action' => 'return', 'token' => 'tok_1', 'nonce' => $this->nonce()]);
 
 		$this->assertSame(self::ADMIN . '?monokulo_connect_error=' . $error, $response->headers['Location']);
-		$this->assertNull($this->repository()->connection(Whmcs::HOST, self::$monokulo->url));
+		$this->assertNull($this->repository()->connection(Whmcs::HOST));
 		$this->assertStringContainsString('Connect finish at ' . self::$monokulo->url . ' failed: HTTP ' . $status, Whmcs::logs());
 	}
 

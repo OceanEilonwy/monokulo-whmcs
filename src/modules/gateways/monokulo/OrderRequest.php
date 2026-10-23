@@ -52,8 +52,8 @@ final class OrderRequest {
 	/**
 	 * The balance as a plain decimal in the currency's own decimals, without
 	 * trailing zeros (`12.50` EUR is `12.5`, `1000.00` JPY is `1000`). WHMCS
-	 * keeps every amount with two places, so a currency with more is never
-	 * padded out to them: Monokulo refuses more decimals than a currency has.
+	 * keeps every amount with two places, which is what a currency with more
+	 * (KWD, XMR) is sent with.
 	 */
 	public static function amount(string $balance, string $currency): string {
 		$amount = number_format((float)$balance, 2, '.', '');
