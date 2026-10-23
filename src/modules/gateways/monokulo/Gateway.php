@@ -45,7 +45,7 @@ final class Gateway {
 				'FriendlyName' => Text::get('entry_address'),
 				'Type'         => 'text',
 				'Size'         => '60',
-				'Default'      => 'https://monokulo.com',
+				'Default'      => 'https://www.monokulo.com',
 				'Description'  => Text::html('help_address'),
 			],
 			'forwardErrors' => [

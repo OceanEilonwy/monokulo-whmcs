@@ -47,7 +47,7 @@ final class AdminAndInvoiceOverHttpTest extends TestCase {
 	public function test_an_admin_saves_the_address_and_connects_over_http(): void {
 		$settings = $this->signIn();
 		$this->assertStringContainsString('Save your Monokulo address first', $settings->text());
-		$this->assertStringContainsString('name="address" value="https://monokulo.com"', $settings->body);
+		$this->assertStringContainsString('name="address" value="https://www.monokulo.com"', $settings->body);
 
 		$saved = $this->browser->submit($settings, 'configgateways.php', ['address' => self::$monokulo->url . '/']);
 		$this->assertSame(200, $saved->status, $saved->body);
