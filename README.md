@@ -234,7 +234,9 @@ scripts/test down
   watch-only wallet, connect, then a client's Pay with Monero lands on the
   Monokulo checkout, a client on the shop's onion address on the onion
   checkout, and the kept entry is used
-  and then revalidated. Nothing is paid. `scripts/smoke` runs it twice:
+  and then revalidated; an invoice in a currency Monokulo has no rate for
+  right now (the rate stand-in rate limits it) makes no order and asks the
+  client to try again. Nothing is paid. `scripts/smoke` runs it twice:
   with Monokulo on its own address, then served under a path through a
   prefix-stripping proxy (`tests/Support/prefix-proxy.php`). It also
   checks the stand-in Monokulo's answers (`tests/Support/Api.php`) against
