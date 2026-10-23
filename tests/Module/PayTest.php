@@ -53,18 +53,18 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertSame(303, $response->status);
 		$this->assertSame(self::$monokulo->url . '/checkout/order_1', $response->headers['Location']);
 		$this->assertSame([
-			'amount'                 => '100.50',
+			'amount'                 => '100.5',
 			'currency'               => 'EUR',
 			'merchant_order_id'      => (string)$invoice,
 			'show_merchant_order_id' => true,
 			'description'            => 'Invoice #' . $invoice . ': Starter - example.com + 2 more',
-			'idempotency_key'        => 'whmcs:' . $invoice . ':100.50:EUR:0',
+			'idempotency_key'        => 'whmcs:' . $invoice . ':100.5:EUR:0',
 		], $this->sent());
 		$request = $this->creates()[0];
 		$this->assertSame('Bearer sk_test', $request['headers']['authorization']);
 		$this->assertSame('whmcs/' . Plugin::VERSION, $request['headers']['monokulo-client']);
 
-		$this->assertSame([['monokulo_order_id' => 'order_1', 'invoice_id' => $invoice, 'amount' => '100.50', 'currency' => 'EUR', 'attempt' => 0, 'expired' => 0]], array_map(static fn(array $r): array => array_intersect_key($r, array_flip(['monokulo_order_id', 'invoice_id', 'amount', 'currency', 'attempt', 'expired'])), Whmcs::rows('mod_monokulo_order')));
+		$this->assertSame([['monokulo_order_id' => 'order_1', 'invoice_id' => $invoice, 'amount' => '100.5', 'currency' => 'EUR', 'attempt' => 0, 'expired' => 0]], array_map(static fn(array $r): array => array_intersect_key($r, array_flip(['monokulo_order_id', 'invoice_id', 'amount', 'currency', 'attempt', 'expired'])), Whmcs::rows('mod_monokulo_order')));
 		$this->assertSame('Unpaid', Whmcs::invoiceStatus($invoice), 'nothing paid yet');
 		$log = Whmcs::gatewayLog();
 		$this->assertCount(1, $log);
@@ -80,7 +80,7 @@ final class PayTest extends WhmcsTestCase {
 
 		$this->get($this->payLink($invoice));
 
-		$this->assertSame('70.00', $this->sent()['amount']);
+		$this->assertSame('70', $this->sent()['amount']);
 		$this->assertSame('USD', $this->sent()['currency']);
 	}
 
@@ -118,7 +118,7 @@ final class PayTest extends WhmcsTestCase {
 
 		$this->assertSame(self::$monokulo->url . '/checkout/order_2', $this->get($this->payLink($invoice))->headers['Location']);
 
-		$this->assertSame('whmcs:' . $invoice . ':100.00:USD:1', $this->sent(1)['idempotency_key']);
+		$this->assertSame('whmcs:' . $invoice . ':100:USD:1', $this->sent(1)['idempotency_key']);
 		$this->assertSame([0, 1], array_column(Whmcs::rows('mod_monokulo_order'), 'attempt'));
 	}
 

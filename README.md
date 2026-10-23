@@ -102,10 +102,22 @@ account).
 | `order.double_spend_detected` | A payment was double-spent and no longer counts | unchanged | Double spend: fraud alert (the status change, if any, comes as its own event) |
 | `order.double_spend_reversed` | That alert was wrong | unchanged | Double spend withdrawn |
 
-A payment is added once per Monokulo order, whatever arrives after it. If
-the balance changed after a first payment request and the older request is
-paid, nothing is added: the gateway log says *Superseded* and asks you to
-check the amount and add the payment yourself.
+An invoice can have more than one Monokulo order: Pay with Monero starts a
+new one when the balance changed or the earlier one expired. The gateway
+remembers each, and Monokulo keeps watching them all:
+
+- A payment from **any** of them is added, under that order's id: the
+  money arrived. If it was an older one, the gateway log asks you to check
+  the amount against the balance.
+- Any other event from an order that isn't the invoice's newest is a
+  gateway log entry only (*Older order: …*); the invoice doesn't change.
+- A paid invoice never goes back. A payment is added once per Monokulo
+  order, whatever arrives after it; a payment to an invoice that is
+  already paid is logged as *Paid again*, and more than was due after a
+  payment was added is logged too, for you to refund from your wallet.
+
+Amounts are sent in the currency's own decimals, without trailing zeros
+(`12.5` EUR, `1500` JPY).
 
 ### Refunds
 

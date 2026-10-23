@@ -103,7 +103,7 @@ final class AdminAndInvoiceOverHttpTest extends TestCase {
 
 		$this->assertSame(303, $pay->status);
 		$this->assertSame(self::$monokulo->url . '/checkout/order_http', $pay->location());
-		$this->assertSame('25.00', json_decode(self::$monokulo->requests()[1]['body'], true)['amount']);
+		$this->assertSame('25', json_decode(self::$monokulo->requests()[1]['body'], true)['amount']);
 	}
 
 	public function test_a_tampered_pay_link_is_refused_over_http(): void {

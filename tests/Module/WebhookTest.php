@@ -103,7 +103,7 @@ final class WebhookTest extends WhmcsTestCase {
 		$this->assertSame(200, $this->deliverVector('order.overpaid'));
 
 		$this->assertCount(1, Whmcs::payments($this->invoice));
-		$this->assertStringContainsString('already on the invoice', $this->lastLog()['data']);
+		$this->assertStringContainsString('already on the invoice, so nothing was added: refund the excess yourself', $this->lastLog()['data']);
 	}
 
 	/** Expired: the invoice stays Unpaid, and the next Pay with Monero is a new attempt. */
@@ -192,17 +192,61 @@ final class WebhookTest extends WhmcsTestCase {
 
 	/**
 	 * The balance changed after a first payment request, so a newer one
-	 * exists. The older one being paid adds nothing: the merchant is asked
-	 * to check the amount.
+	 * exists; Monokulo still watches the older one. Paid all the same: the
+	 * money arrived, so the payment is added, and the merchant is asked to
+	 * check the amount.
 	 */
-	public function test_paying_an_older_request_is_flagged_not_added(): void {
-		$this->repository()->recordOrder('ord_newer', $this->invoice, Whmcs::HOST, '120.00', 'USD', 0, 1760000001);
+	public function test_paying_an_older_request_pays_the_invoice(): void {
+		$this->repository()->recordOrder('order_newer', $this->invoice, Whmcs::HOST, '120', 'USD', 0, 1760000001);
 
 		$this->assertSame(200, $this->deliverVector('order.paid'));
+
+		$this->assertSame('Paid', Whmcs::invoiceStatus($this->invoice));
+		$this->assertSame([Vectors::orderId()], array_column(Whmcs::payments($this->invoice), 'transid'));
+		$this->assertSame('Paid', $this->lastLog()['result']);
+		$this->assertStringContainsString('This was an older payment request for this invoice', $this->lastLog()['data']);
+	}
+
+	/** Anything but a payment, from an order that isn't the invoice's newest, is a log entry only. */
+	public function test_other_events_from_an_older_request_are_log_entries_only(): void {
+		$this->repository()->recordOrder('order_newer', $this->invoice, Whmcs::HOST, '120', 'USD', 0, 1760000001);
+
+		foreach (['order.unconfirmed' => 'Payment seen', 'order.partial' => 'Part paid', 'order.expired' => 'Expired', 'order.double_spend_detected' => 'Double spend'] as $vector => $result) {
+			$this->assertSame(200, $this->deliverVector($vector));
+			$this->assertSame('Older order: ' . $result, $this->lastLog()['result'], $vector);
+			$this->assertStringContainsString('not its current one: nothing on the invoice changed', $this->lastLog()['data']);
+		}
 		$this->assertSame('Unpaid', Whmcs::invoiceStatus($this->invoice));
 		$this->assertSame([], Whmcs::payments($this->invoice));
-		$this->assertSame('Superseded', $this->lastLog()['result']);
-		$this->assertStringContainsString('An older payment request for this invoice was paid', $this->lastLog()['data']);
+	}
+
+	/** A paid invoice never goes back, whatever its Monokulo order says after. */
+	public function test_a_paid_invoice_never_goes_back(): void {
+		$this->deliverVector('order.paid');
+
+		foreach (['order.partial', 'order.expired', 'order.double_spend_detected', 'order.confirming'] as $vector) {
+			$this->assertSame(200, $this->deliverVector($vector));
+			$this->assertSame('Paid', Whmcs::invoiceStatus($this->invoice), $vector);
+		}
+		$this->assertCount(1, Whmcs::payments($this->invoice));
+	}
+
+	/**
+	 * Paid already, by the invoice's newer Monokulo order, when the older one
+	 * is paid too: nothing is added, and the merchant is told to refund it.
+	 */
+	public function test_a_second_payment_to_a_paid_invoice_is_logged_for_a_refund(): void {
+		$this->repository()->recordOrder('order_newer', $this->invoice, Whmcs::HOST, '100', 'USD', 1, 1760000001);
+		addInvoicePayment($this->invoice, 'order_newer', '100', 0, 'monokulo');
+		$this->assertSame('Paid', Whmcs::invoiceStatus($this->invoice));
+
+		foreach (['order.paid', 'order.overpaid'] as $vector) {
+			$this->assertSame(200, $this->deliverVector($vector));
+			$this->assertSame('Paid again', $this->lastLog()['result'], $vector);
+			$this->assertStringContainsString('This is a second payment: refund it from your wallet if needed.', $this->lastLog()['data']);
+		}
+		$this->assertSame(['order_newer'], array_column(Whmcs::payments($this->invoice), 'transid'));
+		$this->assertSame('Paid', Whmcs::invoiceStatus($this->invoice));
 	}
 
 	/** Applying fails (the invoice was deleted): 500, and the event is given back so a retry applies it. */
