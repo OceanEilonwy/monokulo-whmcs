@@ -110,7 +110,7 @@ final class Client {
 			throw new ApiError($response->status, 'no order_id or mk:checkout link: ' . $response->body);
 		}
 
-		return new Order($id, $checkout, $link('mk:onion-checkout'), $link('mk:dashboard-order'));
+		return new Order($id, $checkout, $link('mk:onion-checkout'));
 	}
 
 	/**
@@ -261,7 +261,7 @@ final class Client {
 	 */
 	private function decode(HttpResponse $response, array $expected): array {
 		if (!in_array($response->status, $expected, true)) {
-			throw ApiError::from($response->status, $response->body);
+			throw ApiError::from($response->status, $response->body, $response->headers['retry-after'] ?? '');
 		}
 		$data = json_decode($response->body, true);
 		if (!is_array($data)) {

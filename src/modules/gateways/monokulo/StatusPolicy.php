@@ -16,6 +16,9 @@ namespace Monokulo\Whmcs;
  *   the excess isn't refunded automatically.
  * - `order.expired`: the payment window closed without full payment. The
  *   invoice stays Unpaid; paying it again starts a new Monokulo order.
+ * - `order.cancelled`: the merchant cancelled the order before anything was
+ *   paid (only the POS cancels, its own orders, so an order WHMCS made isn't
+ *   expected to be). As expired: it takes no payment any more.
  * - `order.double_spend_detected`, `order.double_spend_reversed`: gateway
  *   log only. If the order's status changes because of it, monokulo
  *   announces that as its own `order.<status>` event.
@@ -31,6 +34,7 @@ final class StatusPolicy {
 			'order.paid'                            => new Decision('Paid', 'note_paid', paid: true),
 			'order.overpaid'                        => new Decision('Overpaid', 'note_overpaid', paid: true),
 			'order.expired'                         => new Decision('Expired', 'note_expired', expired: true),
+			'order.cancelled'                       => new Decision('Cancelled', 'note_cancelled', expired: true),
 			'order.double_spend_detected'           => new Decision('Double spend', 'note_double_spend_detected'),
 			'order.double_spend_reversed'           => new Decision('Double spend withdrawn', 'note_double_spend_reversed'),
 			default                                 => null,

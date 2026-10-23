@@ -13,9 +13,9 @@ use Illuminate\Database\Schema\Blueprint;
  *   System URL's host), with the API's entry the connect flow gave, and
  *   the entry itself as last read, kept for as long as Monokulo says.
  * - `mod_monokulo_order`: each Monokulo order WHMCS created, which invoice
- *   it pays, and its page on the merchant's dashboard. An invoice can have more than one: when its balance
- *   changed after a first attempt, or an earlier one expired. The newest is
- *   the live one.
+ *   it pays. An invoice can have more than one: when its balance changed
+ *   after a first attempt, or an earlier one expired or was cancelled. The
+ *   newest is the live one.
  * - `mod_monokulo_event`: webhook events already applied, so a delivery that
  *   is sent again (its answer was lost) changes nothing the second time.
  * - `mod_monokulo_nonce`: connect attempts an admin started, each good once
@@ -59,7 +59,6 @@ final class Repository implements EntryCache {
 				$t->integer('attempt');
 				$t->boolean('expired')->default(false);
 				$t->integer('created_at');
-				$t->string('dashboard_url', 512)->nullable();
 			},
 			'mod_monokulo_event' => static function (Blueprint $t): void {
 				$t->string('event_id', 64)->primary();
@@ -82,19 +81,15 @@ final class Repository implements EntryCache {
 				$schema->create($name, $columns);
 			}
 		}
-		// Added in 0.2.0: Monokulo's onion entry and the kept
-		// API entry on the connection, and the order's dashboard page. A shop
-		// connected then has none of them until it reads the entry (onion_api
-		// then comes from the entry's mk:onion-api) or makes an order.
+		// Added in 0.2.0: Monokulo's onion entry and the kept API entry on
+		// the connection. A shop connected before has neither until it reads
+		// the entry (onion_api then comes from the entry's mk:onion-api).
 		$added = [
 			'mod_monokulo_connection' => [
 				'onion_api'        => static fn(Blueprint $t) => $t->string('onion_api', 255)->nullable(),
 				'entry'            => static fn(Blueprint $t) => $t->mediumText('entry')->nullable(),
 				'entry_etag'       => static fn(Blueprint $t) => $t->string('entry_etag', 255)->nullable(),
 				'entry_expires_at' => static fn(Blueprint $t) => $t->integer('entry_expires_at')->nullable(),
-			],
-			'mod_monokulo_order' => [
-				'dashboard_url' => static fn(Blueprint $t) => $t->string('dashboard_url', 512)->nullable(),
 			],
 		];
 		foreach ($added as $table => $columns) {
@@ -215,7 +210,6 @@ final class Repository implements EntryCache {
 	public function recordOrder(Order $order, int $invoiceId, string $host, string $amount, string $currency, int $attempt, int $now): bool {
 		return $this->db->table('mod_monokulo_order')->insertOrIgnore([
 			'monokulo_order_id' => $order->id,
-			'dashboard_url'     => $order->dashboardUrl,
 			'invoice_id'        => $invoiceId,
 			'host'              => $host,
 			'amount'            => $amount,
@@ -226,23 +220,24 @@ final class Repository implements EntryCache {
 	}
 
 	/**
-	 * How many of an invoice's Monokulo orders have expired: the next one is
-	 * a new attempt, so it gets a new idempotency key.
+	 * How many of an invoice's Monokulo orders have expired or been
+	 * cancelled: the next one is a new attempt, so it gets a new idempotency
+	 * key.
 	 */
 	public function attempt(int $invoiceId): int {
 		return $this->db->table('mod_monokulo_order')->where('invoice_id', $invoiceId)->where('expired', true)->count();
 	}
 
+	/** Marks an order that takes no payment any more: expired, or cancelled. */
 	public function markExpired(string $monokuloOrderId): void {
 		$this->db->table('mod_monokulo_order')->where('monokulo_order_id', $monokuloOrderId)->update(['expired' => true]);
 	}
 
 	/**
-	 * The invoice a Monokulo order pays, the amount it was for, whether it
-	 * is that invoice's newest Monokulo order, and its page on the merchant's
-	 * dashboard (null for an order made before 0.2.0 kept it).
+	 * The invoice a Monokulo order pays, the amount it was for, and whether
+	 * it is that invoice's newest Monokulo order.
 	 *
-	 * @return array{invoice_id: int, amount: string, currency: string, latest: bool, dashboard_url: ?string}|null
+	 * @return array{invoice_id: int, amount: string, currency: string, latest: bool}|null
 	 */
 	public function findOrder(string $monokuloOrderId): ?array {
 		$row = $this->db->table('mod_monokulo_order')->where('monokulo_order_id', $monokuloOrderId)->first();
@@ -255,8 +250,7 @@ final class Repository implements EntryCache {
 			'invoice_id' => (int)$row->invoice_id,
 			'amount'     => $row->amount,
 			'currency'   => $row->currency,
-			'latest'        => $newest === $row->monokulo_order_id,
-			'dashboard_url' => $row->dashboard_url !== null && $row->dashboard_url !== '' ? $row->dashboard_url : null,
+			'latest'     => $newest === $row->monokulo_order_id,
 		];
 	}
 

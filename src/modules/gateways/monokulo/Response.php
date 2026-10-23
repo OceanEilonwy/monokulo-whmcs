@@ -23,15 +23,24 @@ final class Response {
 		return new self($status, ['Content-Type' => 'text/plain; charset=utf-8'], $text);
 	}
 
-	/** A small page of its own for the client or admin: the callback is outside WHMCS's templates. */
-	public static function page(int $status, string $messageKey, ?string $back = null): self {
+	/**
+	 * A small page of its own for the client or admin: the callback is
+	 * outside WHMCS's templates. `retryAfter` (seconds) is sent as
+	 * `Retry-After`, when it is worth trying again then.
+	 */
+	public static function page(int $status, string $messageKey, ?string $back = null, ?int $retryAfter = null): self {
 		$link = $back !== null ? '<p><a href="' . Text::escape($back) . '">' . Text::html('text_back') . '</a></p>' : '';
 		$html = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
 			. '<title>' . Text::html('error_title') . '</title>'
 			. '<style>body{font-family:system-ui,sans-serif;max-width:36rem;margin:3rem auto;padding:0 1rem;line-height:1.5}</style></head>'
 			. '<body><h1>' . Text::html('error_title') . '</h1><p>' . Text::html($messageKey) . '</p>' . $link . '</body></html>';
 
-		return new self($status, ['Content-Type' => 'text/html; charset=utf-8'], $html);
+		$headers = ['Content-Type' => 'text/html; charset=utf-8'];
+		if ($retryAfter !== null) {
+			$headers['Retry-After'] = (string)$retryAfter;
+		}
+
+		return new self($status, $headers, $html);
 	}
 
 	public function send(): void {

@@ -125,7 +125,6 @@ final class ClientTest extends TestCase {
 
 		$this->assertSame('order_1', $order->id);
 		$this->assertSame(self::$monokulo->url . '/checkout/order_1', $order->checkoutUrl);
-		$this->assertSame(self::$monokulo->url . '/stores/9f1c/orders/order_1', $order->dashboardUrl);
 		$this->assertNull($order->onionCheckoutUrl, 'no onion address');
 		[$entry, $create] = self::$monokulo->requests();
 		$this->assertSame(['GET', '/api/v1'], [$entry['method'], $entry['path']]);
@@ -180,7 +179,6 @@ final class ClientTest extends TestCase {
 		$order = $this->client()->createOrder($this->connection('/monokulo'), []);
 
 		$this->assertSame(self::$monokulo->url . '/monokulo/checkout/order_1', $order->checkoutUrl);
-		$this->assertSame(self::$monokulo->url . '/monokulo/stores/9f1c/orders/order_1', $order->dashboardUrl);
 		$this->assertSame(['GET /monokulo/api/v1', 'POST /monokulo/api/v1/orders'], self::calls());
 	}
 
@@ -301,7 +299,8 @@ final class ClientTest extends TestCase {
 			'not allowed'      => [403, Api::problem('forbidden', 403, 'Not allowed with this key', 'no'), 'no', 'forbidden', 'error_unavailable', 'refused the store secret key'],
 			'unknown currency' => [400, Api::problem('invalid-amount', 400, 'The order can\'t be priced', 'unknown currency: NOPE'), 'unknown currency: NOPE', 'invalid-amount', 'error_currency', 'can price the invoice\'s currency'],
 			'key reused'       => [409, Api::problem('idempotency-conflict', 409, 'Key used for another order', 'used'), 'used', 'idempotency-conflict', 'error_generic', 'different amount'],
-			'engine down'      => [503, Api::problem('engine-unavailable', 503, 'Payment engine unavailable', 'busy'), 'busy', 'engine-unavailable', 'error_busy', 'try again shortly'],
+			'engine down'      => [503, Api::problem('engine-unavailable', 503, 'Payment engine unavailable', 'busy'), 'busy', 'engine-unavailable', 'error_busy', 'payment engine is busy; no order was made'],
+			'no rate'          => [503, Api::problem('rates-unavailable', 503, 'No exchange rate', 'no rate for EUR'), 'no rate for EUR', 'rates-unavailable', 'error_rates', 'no exchange rate for the invoice\'s currency right now'],
 			'not a problem'    => [500, 'oops', 'oops', '', 'error_generic', ''],
 			'wrong shape'      => [201, ['id' => 'x'], 'no order_id or mk:checkout link: {"id":"x"}', '', 'error_generic', ''],
 			'not an object'    => [201, 'null', 'not JSON: null', '', 'error_generic', ''],
@@ -401,5 +400,30 @@ final class ClientTest extends TestCase {
 	#[DataProvider('cacheControls')]
 	public function test_how_long_an_answer_may_be_kept(string $header, int $seconds): void {
 		$this->assertSame($seconds, Entry::maxAge($header));
+	}
+
+	public static function retryAfters(): array {
+		return [
+			'in the problem'    => [['retry_after' => 30], [], 30],
+			'in the header'     => [[], ['Retry-After' => '45'], 45],
+			'the problem wins'  => [['retry_after' => 30], ['Retry-After' => '45'], 30],
+			'a date, not used'  => [[], ['Retry-After' => 'Wed, 21 Oct 2026 07:28:00 GMT'], null],
+			'neither'           => [[], [], null],
+		];
+	}
+
+	/** How long Monokulo asks to wait before trying again: the problem's retry_after, else Retry-After in seconds. */
+	#[DataProvider('retryAfters')]
+	public function test_a_problem_says_how_long_to_wait(array $extra, array $headers, ?int $seconds): void {
+		self::$monokulo->respond('GET', '/api/v1', 200, Api::entry(), headers: Api::entryHeaders());
+		self::$monokulo->respond('POST', '/api/v1/orders', 503, Api::problem('rates-unavailable', 503, 'No exchange rate', 'none') + $extra, headers: ['Content-Type' => Api::PROBLEM] + $headers);
+
+		try {
+			$this->client()->createOrder($this->connection(), []);
+			$this->fail('no error');
+		} catch (ApiError $e) {
+			$this->assertSame($seconds, $e->retryAfter);
+			$this->assertTrue($e->tryAgain());
+		}
 	}
 }

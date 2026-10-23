@@ -19,6 +19,7 @@ final class StatusPolicyTest extends TestCase {
 		'order.paid'                  => ['Paid', 'note_paid', true, false],
 		'order.overpaid'              => ['Overpaid', 'note_overpaid', true, false],
 		'order.expired'               => ['Expired', 'note_expired', false, true],
+		'order.cancelled'             => ['Cancelled', 'note_cancelled', false, true],
 		'order.double_spend_detected' => ['Double spend', 'note_double_spend_detected', false, false],
 		'order.double_spend_reversed' => ['Double spend withdrawn', 'note_double_spend_reversed', false, false],
 	];
