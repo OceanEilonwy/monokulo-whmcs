@@ -1,4 +1,6 @@
 <?php
+declare(strict_types=1);
+
 namespace Monokulo\Whmcs;
 
 /** The parts of a WHMCS invoice the gateway uses, from its local API. */

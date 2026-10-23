@@ -1,4 +1,6 @@
 <?php
+declare(strict_types=1);
+
 /**
  * Loads the gateway's own classes (namespace Monokulo\Whmcs, one class per
  * file named after it). Most know nothing about WHMCS, so the unit tests
