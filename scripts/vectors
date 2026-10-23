@@ -37,7 +37,15 @@ check)
 	;;
 pin)
 	new=${2:?usage: scripts/vectors pin <commit>}
-	fetch "$new" > tests/vectors/webhook-vectors.json
+	# Into a temporary file first: a commit that doesn't exist (or a failed
+	# download) leaves the vendored file and the pin as they were.
+	tmp=$(mktemp)
+	trap 'rm -f "$tmp"' EXIT
+	if ! fetch "$new" > "$tmp" || ! [ -s "$tmp" ]; then
+		echo "could not fetch $path at $new: nothing changed" >&2
+		exit 1
+	fi
+	mv "$tmp" tests/vectors/webhook-vectors.json
 	printf 'repository=%s\ncommit=%s\npath=%s\n' "$repository" "$new" "$path" > tests/vectors/PIN
 	echo "pinned to $new"
 	;;
