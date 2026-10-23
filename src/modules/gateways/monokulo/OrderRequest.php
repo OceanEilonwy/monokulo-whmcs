@@ -4,7 +4,7 @@ declare(strict_types=1);
 namespace Monokulo\Whmcs;
 
 /**
- * The body of `POST /pay/{pk}/orders` for one WHMCS invoice.
+ * What the API's `create-order` form is sent for one WHMCS invoice.
  *
  * The amount is the invoice's balance in the client's currency, and
  * Monokulo converts it to XMR at its own rate: WHMCS never converts. The

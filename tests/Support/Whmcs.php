@@ -55,12 +55,15 @@ final class Whmcs {
 		}
 	}
 
-	/** Connected as the connect flow leaves it (the gateway makes its tables first). */
-	public static function connect(string $endpoint, string $webhookSecret, string $host = self::HOST): void {
+	/**
+	 * Connected as the connect flow leaves it (the gateway makes its tables
+	 * first), to the Monokulo at `monokulo`: its API's entry is `/api/v1` there.
+	 */
+	public static function connect(string $monokulo, string $webhookSecret, string $host = self::HOST): void {
 		(new \Monokulo\Whmcs\Repository(Capsule::connection()))->install();
 		Capsule::table('mod_monokulo_connection')->insert([
 			'host'               => $host,
-			'endpoint'           => $endpoint,
+			'api'                => $monokulo . '/api/v1',
 			'public_key'         => 'pk_test',
 			'secret_token'       => 'sk_test',
 			'webhook_secret'     => $webhookSecret,

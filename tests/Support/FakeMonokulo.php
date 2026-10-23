@@ -37,10 +37,15 @@ final class FakeMonokulo {
 		throw new \RuntimeException('the fake Monokulo did not start: ' . (string)@file_get_contents($this->dir . '/server.log'));
 	}
 
-	/** Answers `METHOD path` with `status` and `body` (a string, or JSON-encoded). */
-	public function respond(string $method, string $path, int $status, mixed $body, int $delaySeconds = 0): void {
+	/**
+	 * Answers `METHOD path` with `status` and `body` (a string, or JSON-encoded),
+	 * and `headers` (`Content-Type` is `application/json` unless given).
+	 *
+	 * @param array<string, string> $headers
+	 */
+	public function respond(string $method, string $path, int $status, mixed $body, int $delaySeconds = 0, array $headers = []): void {
 		$responses = is_file($this->dir . '/responses.json') ? json_decode((string)file_get_contents($this->dir . '/responses.json'), true) : [];
-		$responses[$method . ' ' . $path] = ['status' => $status, 'body' => $body, 'delay' => $delaySeconds];
+		$responses[$method . ' ' . $path] = ['status' => $status, 'body' => $body, 'delay' => $delaySeconds, 'headers' => $headers];
 		file_put_contents($this->dir . '/responses.json', json_encode($responses));
 	}
 

@@ -82,7 +82,7 @@ final class WebhookTest extends WhmcsTestCase {
 		$this->assertStringContainsString('invoice => ' . $this->invoice, $log['data']);
 		$this->assertStringContainsString('event => order.paid', $log['data']);
 		$this->assertStringContainsString('amount => 100.00 USD', $log['data']);
-		$this->assertStringContainsString('in_monokulo => https://pay.example.com/dashboard/stores/917701c2-15c7-4bcb-bbc8-72d9ab28e785/orders/' . Vectors::orderId(), $log['data']);
+		$this->assertStringContainsString('in_monokulo => https://pay.example.com/stores/917701c2-15c7-4bcb-bbc8-72d9ab28e785/orders/' . Vectors::orderId(), $log['data']);
 	}
 
 	public function test_paid_in_xmr_is_paid_too(): void {

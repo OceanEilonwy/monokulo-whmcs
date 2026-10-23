@@ -1,6 +1,7 @@
 <?php
 namespace Monokulo\Whmcs\Tests\Smoke;
 
+use Monokulo\Whmcs\Tests\Support\Api;
 use Monokulo\Whmcs\Tests\Support\Browser;
 use Monokulo\Whmcs\Tests\Support\Page;
 use Monokulo\Whmcs\Tests\Support\Whmcs;
@@ -17,8 +18,12 @@ use PHPUnit\Framework\TestCase;
  * 3. on Monokulo, sets up the store for WHMCS, picks the wallet, and goes
  *    back to WHMCS, which redeems the token: connected;
  * 4. a client presses Pay with Monero on an invoice: WHMCS creates the
- *    Monokulo order and sends them to its checkout, which loads and says
- *    pending.
+ *    Monokulo order through the API's create-order form and sends them to
+ *    the order's checkout, which loads; the order, read with its `self`
+ *    link, is pending.
+ *
+ * And the stand-in Monokulo's answers (tests/Support/Api.php) are checked
+ * against the OpenAPI document and the API of the real one.
  *
  * Nothing is paid. Monokulo's pages are filled in by their fields' names.
  */
@@ -49,10 +54,69 @@ final class MonokuloSmokeTest extends TestCase {
 		// The Monokulo checkout loads, and the new order is waiting for payment.
 		$page = $this->browser->get($checkout);
 		$this->assertSame(200, $page->status, $page->text());
-		$status = $this->browser->get($checkout . '/status');
-		$this->assertSame(200, $status->status);
-		$this->assertSame('pending', $status->json()['status']);
-		$this->assertSame(0, $status->json()['confirmations']);
+		$orderId = Whmcs::rows('mod_monokulo_order')[0]['monokulo_order_id'];
+		$this->assertSame($this->monokulo . '/checkout/' . $orderId, $checkout);
+
+		// The real API, read with the key WHMCS keeps: the entry's form is
+		// where the stand-in's is, and the order has what WHMCS reads.
+		$entry = $this->api('/api/v1');
+		$this->assertSame(Api::entry()['_templates']['create-order']['target'], $entry['_templates']['create-order']['target']);
+		$this->assertSame('POST', $entry['_templates']['create-order']['method']);
+		$order = $this->api('/api/v1/orders/' . $orderId);
+		$this->assertSame('pending', $order['status']);
+		$this->assertSame('/checkout/' . $orderId, $order['_links']['mk:checkout']['href']);
+		$this->assertSame([], array_diff(array_keys(Api::order()), array_keys($order)), 'the stand-in\'s order has no field the real one lacks');
+		$this->assertSame([], array_diff(array_keys(Api::order()['_links']), array_keys($order['_links'])));
+	}
+
+	/** The stand-in's API is the real one's, as its OpenAPI document describes it. */
+	public function test_the_stand_in_api_matches_the_openapi_document(): void {
+		$doc = $this->browser->get($this->monokulo . '/api/v1/openapi.json');
+		$this->assertSame(200, $doc->status);
+		$openapi = $doc->json();
+		$schemas = $openapi['components']['schemas'];
+
+		$create = $openapi['paths']['/api/v1/orders']['post'];
+		$this->assertSame('create-order', $create['x-hal-forms-template']);
+		$this->assertContains('sk', $create['x-monokulo-keys']);
+		$this->assertArrayHasKey('Location', $create['responses']['201']['headers']);
+		$this->assertArrayHasKey(Api::HAL_FORMS, $create['responses']['201']['content']);
+		$this->assertArrayHasKey(Api::PROBLEM, $create['responses']['default']['content']);
+
+		// What WHMCS sends is what the form takes, and every required field.
+		$input = $schemas['OrdersInput'];
+		$sent = ['amount', 'currency', 'merchant_order_id', 'show_merchant_order_id', 'description', 'idempotency_key'];
+		$this->assertSame([], array_diff($sent, array_keys($input['properties'])));
+		$this->assertSame([], array_diff($input['required'], $sent));
+		$fields = array_column(Api::entry()['_templates']['create-order']['properties'], 'name');
+		sort($fields);
+		$real = array_keys($input['properties']);
+		sort($real);
+		$this->assertSame($real, $fields, 'the stand-in\'s form has the real one\'s fields');
+
+		// The order: its fields and links, as the stand-in answers them.
+		$order = $schemas['Order'];
+		$this->assertSame([], array_diff(array_keys(Api::order()), array_keys($order['properties'])));
+		$this->assertSame([], array_diff(array_keys(Api::order()['_links']), array_keys($order['properties']['_links']['properties'])));
+		$this->assertSame([], array_diff(array_keys(Api::entry()['_links']), array_keys($schemas['Root']['properties']['_links']['properties'])));
+		$this->assertSame(['type', 'title', 'status', 'detail'], $schemas['Problem']['required']);
+		$this->assertSame(['type', 'title', 'status', 'detail'], array_keys(Api::problem('x', 400, 't', 'd')));
+
+		// Logs: where the entry's `logs` is, with the secret key.
+		$logs = $openapi['paths']['/api/v1/logs']['post'];
+		$this->assertContains('sk', $logs['x-monokulo-keys']);
+		$this->assertSame(['entries'], $schemas['LogsInput']['required']);
+	}
+
+	/** GET a path of the real API with the store's secret key WHMCS keeps. @return array<string, mixed> */
+	private function api(string $path): array {
+		$secret = Whmcs::rows('mod_monokulo_connection')[0]['secret_token'];
+		$curl = curl_init($this->monokulo . $path);
+		curl_setopt_array($curl, [CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $secret, 'Accept: ' . Api::HAL_FORMS]]);
+		$body = (string)curl_exec($curl);
+		$this->assertSame(200, curl_getinfo($curl, CURLINFO_RESPONSE_CODE), $body);
+
+		return json_decode($body, true);
 	}
 
 	/** A fresh Monokulo asks for its operator first; that account is the merchant's too. */
@@ -63,8 +127,8 @@ final class MonokuloSmokeTest extends TestCase {
 			$page = $this->browser->get($this->monokulo . '/admin/setup');
 			$done = $this->browser->submit($page, '/admin/setup', ['email' => $email, 'password' => self::PASSWORD, 'confirm_password' => self::PASSWORD]);
 		} else {
-			$page = $this->browser->get($this->monokulo . '/dashboard/signup');
-			$done = $this->browser->submit($page, '/dashboard/signup', ['email' => $email, 'password' => self::PASSWORD, 'confirm_password' => self::PASSWORD]);
+			$page = $this->browser->get($this->monokulo . '/signup');
+			$done = $this->browser->submit($page, '/signup', ['email' => $email, 'password' => self::PASSWORD, 'confirm_password' => self::PASSWORD]);
 		}
 		$this->assertContains($done->status, [302, 303], 'signed up: ' . $done->text());
 
@@ -105,7 +169,7 @@ final class MonokuloSmokeTest extends TestCase {
 		$this->assertStringContainsString('WHMCS is connected', $admin->text());
 		$connection = Whmcs::rows('mod_monokulo_connection')[0];
 		$this->assertSame(Whmcs::HOST, $connection['host']);
-		$this->assertSame($this->monokulo, rtrim($connection['endpoint'], '/'));
+		$this->assertSame($this->monokulo . '/api/v1', $connection['api']);
 		$this->assertStringStartsWith('pk_', $connection['public_key']);
 		$this->assertNotSame('', $connection['webhook_secret']);
 	}
@@ -120,8 +184,7 @@ final class MonokuloSmokeTest extends TestCase {
 
 		$pay = $this->browser->get(html_entity_decode($m[1], ENT_QUOTES));
 		$this->assertSame(303, $pay->status, $pay->text());
-		$connection = Whmcs::rows('mod_monokulo_connection')[0];
-		$this->assertStringStartsWith($this->monokulo . '/pay/' . $connection['public_key'] . '/orders/', (string)$pay->location());
+		$this->assertStringStartsWith($this->monokulo . '/checkout/order_', (string)$pay->location());
 
 		$order = Whmcs::rows('mod_monokulo_order')[0];
 		$this->assertSame([$invoice, '22.49', 'USD'], [$order['invoice_id'], $order['amount'], $order['currency']]);

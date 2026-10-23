@@ -47,6 +47,7 @@ final class Text {
 		'error_busy'                => 'Monero payments are busy right now. Please wait a moment and try again.',
 		'error_unavailable'         => 'Monero payments are not available right now. Please contact us.',
 		'error_generic'             => 'The Monero payment could not be started. Please try again, or contact us.',
+		'error_currency'            => 'This invoice\'s currency can\'t be paid in Monero right now. Please contact us.',
 		'error_unreachable'         => 'The Monero payment service could not be reached. Please try again shortly.',
 
 		// Gateway log (Billing > Gateway Log)

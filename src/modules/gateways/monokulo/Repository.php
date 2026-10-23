@@ -10,7 +10,7 @@ use Illuminate\Database\Schema\Blueprint;
  * The gateway's own tables, through WHMCS's database (Capsule's connection).
  *
  * - `mod_monokulo_connection`: one row per host that has connected (WHMCS's
- *   System URL's host).
+ *   System URL's host), with the API's entry the connect flow gave.
  * - `mod_monokulo_order`: each Monokulo order WHMCS created, and which
  *   invoice it pays. An invoice can have more than one: when its balance
  *   changed after a first attempt, or an earlier one expired. The newest is
@@ -38,7 +38,7 @@ final class Repository {
 		$tables = [
 			'mod_monokulo_connection' => static function (Blueprint $t): void {
 				$t->string('host', 191)->primary();
-				$t->string('endpoint', 255);
+				$t->string('api', 255)->nullable();
 				$t->string('public_key', 128);
 				$t->string('secret_token', 255);
 				$t->string('webhook_secret', 255);
@@ -76,17 +76,42 @@ final class Repository {
 				$schema->create($name, $columns);
 			}
 		}
+		// A connection made before the API's entry was handed over has the
+		// old `endpoint` instead: the entry is left empty (connection() fills
+		// it in from the Monokulo address) and the endpoint goes.
+		if ($schema->hasColumn('mod_monokulo_connection', 'endpoint')) {
+			$schema->table('mod_monokulo_connection', static function (Blueprint $t): void {
+				$t->string('api', 255)->nullable();
+			});
+			$schema->table('mod_monokulo_connection', static function (Blueprint $t): void {
+				$t->dropColumn('endpoint');
+			});
+		}
 	}
 
-	public function connection(string $host): ?Connection {
+	/**
+	 * The host's connection, or null before it has connected. One made
+	 * before the API's entry was handed over gets `<address>/api/v1`, the
+	 * entry on the Monokulo address the gateway's settings have, so it keeps
+	 * working without connecting again (null when there's no such address).
+	 */
+	public function connection(string $host, string $address): ?Connection {
 		$row = $this->db->table('mod_monokulo_connection')->where('host', $host)->first();
 		if (!$row) {
 			return null;
 		}
+		$api = (string)($row->api ?? '');
+		if ($api === '') {
+			$address = ConnectLink::address($address);
+			if ($address === null) {
+				return null;
+			}
+			$api = $address . '/api/v1';
+		}
 
 		return new Connection(
 			$row->host,
-			$row->endpoint,
+			$api,
 			$row->public_key,
 			$row->secret_token,
 			$row->webhook_secret,
@@ -96,7 +121,7 @@ final class Repository {
 
 	public function saveConnection(Connection $c): void {
 		$this->db->table('mod_monokulo_connection')->updateOrInsert(['host' => $c->host], [
-			'endpoint'           => $c->endpoint,
+			'api'                => $c->api,
 			'public_key'         => $c->publicKey,
 			'secret_token'       => $c->secretToken,
 			'webhook_secret'     => $c->webhookSecret,
