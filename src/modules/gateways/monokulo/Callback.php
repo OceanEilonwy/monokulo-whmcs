@@ -69,8 +69,9 @@ final class Callback {
 	 * Creates the Monokulo order for the invoice's balance (or gets the one
 	 * made before, when nothing changed) and sends the client to pay it: to
 	 * its checkout, or, for a client on the shop's onion address, to its
-	 * checkout on Monokulo's onion address (never to the web: when Monokulo
-	 * has no onion address the client is told, and the merchant warned).
+	 * checkout on Monokulo's onion address (never to the web: when the
+	 * entry says Monokulo has no onion address, the client is told and the
+	 * merchant warned, and no order is made).
 	 */
 	private function pay(Request $request): Response {
 		$invoiceId = (int)$request->get('invoice');
@@ -98,6 +99,11 @@ final class Callback {
 		$attempt = $this->repository->attempt($invoiceId);
 		$body = OrderRequest::body($invoice, $attempt, sprintf(Text::get('text_invoice'), $invoice->number), Text::get('text_more'));
 		try {
+			// Over Tor, the entry says first whether Monokulo has an onion
+			// address at all: without one no order is made, to expire unused.
+			if ($onion && $this->client()->onionApi($connection) === null) {
+				return $this->noOnion($invoiceId, $back);
+			}
 			$order = $this->client()->createOrder($connection, $body);
 		} catch (ApiError $e) {
 			$this->log->error(sprintf('Creating the Monokulo order for invoice %d failed: HTTP %d: %s%s', $invoiceId, $e->status, $e->detail, $e->merchantHint()));
@@ -112,9 +118,7 @@ final class Callback {
 		$new = $this->repository->recordOrder($order, $invoiceId, $connection->host, $body['amount'], $body['currency'], $attempt, $this->now);
 		$checkout = $onion ? $order->onionCheckoutUrl : $order->checkoutUrl;
 		if ($checkout === null) {
-			$this->log->error(sprintf('Invoice %d: a client on the shop\'s onion address wanted to pay with Monero, but your Monokulo has no onion address, so they could not pay over Tor (Monokulo order %s).', $invoiceId, $order->id));
-
-			return Response::page(503, 'error_no_onion', $back);
+			return $this->noOnion($invoiceId, $back);
 		}
 		if ($new) {
 			$this->whmcs->gatewayLog([
@@ -127,6 +131,13 @@ final class Callback {
 		$this->log->info(sprintf('Invoice %d: client sent to Monokulo order %s%s.', $invoiceId, $order->id, $onion ? ' over Tor' : ''));
 
 		return Response::redirect($checkout);
+	}
+
+	/** A client on Tor, and Monokulo has no onion address: told so, never sent to the web. */
+	private function noOnion(int $invoiceId, string $back): Response {
+		$this->log->error(sprintf('Invoice %d: a client on the shop\'s onion address wanted to pay with Monero, but your Monokulo has no onion address, so they could not pay over Tor.', $invoiceId));
+
+		return Response::page(503, 'error_no_onion', $back);
 	}
 
 	/**

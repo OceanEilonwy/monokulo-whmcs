@@ -149,6 +149,30 @@ final class ClientTest extends TestCase {
 		$this->assertSame(self::$monokulo->url . '/checkout/order_1', $order->checkoutUrl);
 	}
 
+	/** Whether Monokulo has an onion address, from the entry, kept like the rest of it. */
+	public function test_the_entry_says_where_the_onion_api_is(): void {
+		self::$monokulo->respond('GET', '/api/v1', 200, Api::entry(onion: true), headers: Api::entryHeaders());
+		$this->assertSame(Api::ONION . '/api/v1', $this->client()->onionApi($this->connection()));
+		$this->assertSame(Api::ONION . '/api/v1', $this->client()->onionApi($this->connection()));
+		$this->assertSame(['GET /api/v1'], self::calls());
+
+		$this->cache->entries = [];
+		self::$monokulo->respond('GET', '/api/v1', 200, Api::entry(), headers: Api::entryHeaders());
+		$this->assertNull($this->client()->onionApi($this->connection()));
+	}
+
+	/** A kept entry without an onion address is asked about again before it is believed: unchanged, a 304. */
+	public function test_a_kept_entry_without_an_onion_address_is_revalidated(): void {
+		$this->cache->entries['sk_test'] = new Entry(self::$monokulo->url . '/api/v1', Api::entry(), Api::ETAG, self::NOW + 1000);
+		self::$monokulo->respond('GET', '/api/v1', 200, Api::entry(), headers: Api::entryHeaders());
+
+		$this->assertNull($this->client()->onionApi($this->connection()));
+
+		$this->assertSame(['GET /api/v1'], self::calls());
+		$this->assertSame(Api::ETAG, self::$monokulo->requests()[0]['headers']['if-none-match']);
+		$this->assertSame(self::NOW + 3600, $this->cache->entries['sk_test']->expiresAt);
+	}
+
 	/** Under a path: every address is the link Monokulo gave, path and all. */
 	public function test_under_a_path_every_link_keeps_it(): void {
 		Api::serve(self::$monokulo, 'order_1', prefix: '/monokulo');
