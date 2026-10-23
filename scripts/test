@@ -44,8 +44,10 @@ up)
 install)
 	# The http and smoke suites reach the gateway as WHMCS does, through the
 	# files the zip puts in the WHMCS root (the in-process suites load src/).
+	# The zip's entries all have the same date, so they are unzipped with
+	# today's (-DD): the web server's opcache then sees each install as new.
 	run php scripts/build-zip
-	run sh -c 'rm -rf tests/whmcs/modules && unzip -q dist/monokulo-whmcs.zip -d tests/whmcs'
+	run sh -c 'rm -rf tests/whmcs/modules && unzip -q -DD dist/monokulo-whmcs.zip -d tests/whmcs'
 	;;
 down)
 	compose down -v
