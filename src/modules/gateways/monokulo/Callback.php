@@ -67,7 +67,10 @@ final class Callback {
 
 	/**
 	 * Creates the Monokulo order for the invoice's balance (or gets the one
-	 * made before, when nothing changed) and sends the client to pay it.
+	 * made before, when nothing changed) and sends the client to pay it: to
+	 * its checkout, or, for a client on the shop's onion address, to its
+	 * checkout on Monokulo's onion address (never to the web: when Monokulo
+	 * has no onion address the client is told, and the merchant warned).
 	 */
 	private function pay(Request $request): Response {
 		$invoiceId = (int)$request->get('invoice');
@@ -76,7 +79,8 @@ final class Callback {
 
 			return Response::page(403, 'error_link');
 		}
-		$back = $this->systemUrl . 'viewinvoice.php?id=' . $invoiceId;
+		$onion = Links::isOnion($request->origin);
+		$back = Links::shopUrl($this->systemUrl, $request->origin) . 'viewinvoice.php?id=' . $invoiceId;
 		$connection = $this->connection();
 		if (!$connection) {
 			$this->log->error(sprintf('Invoice %d: a client wanted to pay with Monero, but WHMCS is not connected to Monokulo (connect it from the gateway settings).', $invoiceId));
@@ -94,7 +98,7 @@ final class Callback {
 		$attempt = $this->repository->attempt($invoiceId);
 		$body = OrderRequest::body($invoice, $attempt, sprintf(Text::get('text_invoice'), $invoice->number), Text::get('text_more'));
 		try {
-			$order = (new Client($this->trace))->createOrder($connection, $body);
+			$order = $this->client()->createOrder($connection, $body);
 		} catch (ApiError $e) {
 			$this->log->error(sprintf('Creating the Monokulo order for invoice %d failed: HTTP %d: %s%s', $invoiceId, $e->status, $e->detail, $e->merchantHint()));
 
@@ -105,17 +109,24 @@ final class Callback {
 			return Response::page(502, 'error_unreachable', $back);
 		}
 
-		if ($this->repository->recordOrder($order->id, $invoiceId, $connection->host, $body['amount'], $body['currency'], $attempt, $this->now)) {
+		$new = $this->repository->recordOrder($order, $invoiceId, $connection->host, $body['amount'], $body['currency'], $attempt, $this->now);
+		$checkout = $onion ? $order->onionCheckoutUrl : $order->checkoutUrl;
+		if ($checkout === null) {
+			$this->log->error(sprintf('Invoice %d: a client on the shop\'s onion address wanted to pay with Monero, but your Monokulo has no onion address, so they could not pay over Tor (Monokulo order %s).', $invoiceId, $order->id));
+
+			return Response::page(503, 'error_no_onion', $back);
+		}
+		if ($new) {
 			$this->whmcs->gatewayLog([
 				'invoice'        => (string)$invoiceId,
 				'monokulo_order' => $order->id,
 				'amount'         => $body['amount'] . ' ' . $body['currency'],
-				'note'           => sprintf(Text::get('note_started'), $order->checkoutUrl),
+				'note'           => sprintf(Text::get('note_started'), $checkout),
 			], 'Sent to pay');
 		}
-		$this->log->info(sprintf('Invoice %d: client sent to Monokulo order %s.', $invoiceId, $order->id));
+		$this->log->info(sprintf('Invoice %d: client sent to Monokulo order %s%s.', $invoiceId, $order->id, $onion ? ' over Tor' : ''));
 
-		return Response::redirect($order->checkoutUrl);
+		return Response::redirect($checkout);
 	}
 
 	/**
@@ -171,21 +182,25 @@ final class Callback {
 	private function finishConnect(string $host, string $token): string {
 		$address = (string)ConnectLink::address((string)($this->gateway['address'] ?? ''));
 		try {
-			$credentials = (new Client($this->trace))->finishConnect($address, $token, Links::callback($this->systemUrl));
+			$credentials = $this->client()->finishConnect($address, $token, Links::callback($this->systemUrl));
 		} catch (ApiError $e) {
-			$this->log->error(sprintf('Connect finish at %s failed: HTTP %d: %s', $address, $e->status, $e->detail));
+			$this->log->error(sprintf('Connect finish at %s failed: HTTP %d%s: %s', $address, $e->status, $e->problem !== '' ? ' ' . $e->problem : '', $e->detail));
 
-			return $e->status === 503 ? 'monokulo_connect_error=unavailable' : 'monokulo_connect_error=finish';
+			return 'monokulo_connect_error=' . match ($e->problem) {
+				'no-public-address'                    => 'unavailable',
+				'rate-limited', 'challenge-required'   => 'busy',
+				default                                => 'finish',
+			};
 		} catch (TransportError $e) {
 			$this->log->error(sprintf('Connect finish at %s failed: could not reach it: %s', $address, $e->getMessage()));
 
 			return 'monokulo_connect_error=unreachable';
 		}
 
-		$this->connection = new Connection($host, $credentials['api'], $credentials['public_key'], $credentials['secret_token'], $credentials['webhook_signing_secret'], $this->now);
+		$this->connection = new Connection($host, $credentials['api'], $credentials['public_key'], $credentials['secret_token'], $credentials['webhook_signing_secret'], $this->now, $credentials['onion_api']);
 		$this->connectionRead = true;
 		$this->repository->saveConnection($this->connection);
-		$this->log->info(sprintf('%s connected to Monokulo as %s.', $host, $credentials['public_key']));
+		$this->log->info(sprintf('%s connected to Monokulo as %s%s.', $host, $credentials['public_key'], $credentials['onion_api'] !== null ? ', on Tor at ' . $credentials['onion_api'] : ''));
 
 		return 'monokulo_connected=1';
 	}
@@ -193,7 +208,7 @@ final class Callback {
 	/** This WHMCS's connection, or null before it has connected. */
 	private function connection(): ?Connection {
 		if (!$this->connectionRead) {
-			$this->connection = $this->repository->connection(ConnectLink::host($this->systemUrl), (string)($this->gateway['address'] ?? ''));
+			$this->connection = $this->repository->connection(ConnectLink::host($this->systemUrl));
 			$this->connectionRead = true;
 		}
 
@@ -204,7 +219,11 @@ final class Callback {
 	private function forward(): void {
 		$connection = $this->connection();
 		if ($connection && ($this->gateway['forwardErrors'] ?? '') === 'on') {
-			(new Client($this->trace))->forwardLogs($connection, $this->log->forwardable());
+			$this->client()->forwardLogs($connection, $this->log->forwardable());
 		}
+	}
+
+	private function client(): Client {
+		return new Client($this->trace, $this->repository, $this->now);
 	}
 }

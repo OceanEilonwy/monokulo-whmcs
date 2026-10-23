@@ -1,6 +1,10 @@
 #!/bin/sh
 # Runs the smoke suite against a fresh Monokulo on this machine's network
-# (docker/monokulo-smoke.toml), then stops it. The stand-in WHMCS must be up
+# (docker/monokulo-smoke.toml, its exchange rates from
+# tests/Support/fake-rates.php), then stops it; then again with a fresh
+# Monokulo served under a path (http://localhost:8085/monokulo, through
+# tests/Support/prefix-proxy.php in the PHP container), as a merchant's own
+# reverse proxy would serve it. The stand-in WHMCS must be up
 # (scripts/test up).
 #
 # Which Monokulo:
@@ -8,51 +12,110 @@
 #   MONOKULO_IMAGE=ghcr.io/...       its Docker image (the default:
 #                                    monokulo:smoke, built by CI from the
 #                                    commit in tests/vectors/PIN)
+# MONOKULO_OPENAPI=/path/to/openapi.json, when set, is the OpenAPI document
+# written at that commit (`cargo xtask api openapi`), whose recorded
+# examples the stand-in's answers are checked against too.
 set -eu
 cd "$(dirname "$0")/.."
 
-url=http://localhost:8083
-# Another Monokulo on the port would be tested in this one's place.
-if curl -s -o /dev/null "$url/"; then
-	echo "something already answers on $url: stop it, then run this again" >&2
-	exit 1
-fi
+direct=http://localhost:8083
+proxied=http://localhost:8085
+# Another Monokulo (or proxy) on these ports would be tested in this one's place.
+for url in "$direct" "$proxied" http://localhost:8084 http://localhost:8086; do
+	if curl -s -o /dev/null "$url/"; then
+		echo "something already answers on $url: stop it, then run this again" >&2
+		exit 1
+	fi
+done
 
-data=$(mktemp -d)
-key=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
+compose() {
+	docker compose -f docker/compose.yaml "$@"
+}
 
-if [ -n "${MONOKULO_BIN:-}" ]; then
-	MONOKULO_ENCRYPTION_KEY=$key "$MONOKULO_BIN" --options docker/monokulo-smoke.toml \
-		--database-path "$data/monokulo.db" --logging-format json > "$data/monokulo.log" 2>&1 &
-	pid=$!
-	stop() { kill "$pid" 2>/dev/null || true; }
-else
-	chmod 777 "$data"
-	docker run -d --rm --name monokulo-whmcs-smoke --network host \
-		-e MONOKULO_ENCRYPTION_KEY="$key" \
-		-v "$PWD/docker/monokulo-smoke.toml:/etc/monokulo.toml:ro" -v "$data:/data" \
-		"${MONOKULO_IMAGE:-monokulo:smoke}" monokulo --options /etc/monokulo.toml \
-		--database-path /data/monokulo.db --logging-format json > /dev/null
-	stop() { docker logs monokulo-whmcs-smoke > "$data/monokulo.log" 2>&1 || true; docker stop monokulo-whmcs-smoke > /dev/null 2>&1 || true; }
-fi
+data=
+pid=
+started=
+
+start() {
+	data=$(mktemp -d)
+	key=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
+	if [ -n "${MONOKULO_BIN:-}" ]; then
+		MONOKULO_ENCRYPTION_KEY=$key "$MONOKULO_BIN" --options docker/monokulo-smoke.toml \
+			--database-path "$data/monokulo.db" --public-uri "$1" --logging-format json > "$data/monokulo.log" 2>&1 &
+		pid=$!
+	else
+		chmod 777 "$data"
+		docker run -d --rm --name monokulo-whmcs-smoke --network host \
+			-e MONOKULO_ENCRYPTION_KEY="$key" \
+			-v "$PWD/docker/monokulo-smoke.toml:/etc/monokulo.toml:ro" -v "$data:/data" \
+			"${MONOKULO_IMAGE:-monokulo:smoke}" monokulo --options /etc/monokulo.toml \
+			--database-path /data/monokulo.db --public-uri "$1" --logging-format json > /dev/null
+	fi
+	started=1
+	for i in $(seq 1 60); do
+		if curl -fs -o /dev/null "$direct/status" || curl -s -o /dev/null -w '%{http_code}' "$direct/" | grep -q 302; then
+			return
+		fi
+		sleep 1
+	done
+}
+
+stop() {
+	if [ -z "$started" ]; then
+		return
+	fi
+	if [ -n "${MONOKULO_BIN:-}" ]; then
+		kill "$pid" 2>/dev/null || true
+		wait "$pid" 2>/dev/null || true
+	else
+		docker logs monokulo-whmcs-smoke > "$data/monokulo.log" 2>&1 || true
+		docker stop monokulo-whmcs-smoke > /dev/null 2>&1 || true
+	fi
+	started=
+}
+
+# A PHP router served from the PHP container, in the background: name, port, router, env.
+serve() {
+	name=$1 port=$2 router=$3
+	shift 3
+	compose exec -T -d "$@" whmcs sh -c "echo \$\$ > /tmp/smoke-$name.pid; exec php -S localhost:$port $router"
+}
+
+unserve() {
+	compose exec -T whmcs sh -c "test -f /tmp/smoke-$1.pid && kill \"\$(cat /tmp/smoke-$1.pid)\" && rm -f /tmp/smoke-$1.pid" 2>/dev/null || true
+}
 
 cleanup() {
 	status=$?
 	stop
-	if [ "$status" != 0 ]; then
+	unserve proxy
+	unserve rates
+	if [ "$status" != 0 ] && [ -n "$data" ]; then
 		echo "--- Monokulo's log ---"
 		tail -n 100 "$data/monokulo.log" 2>/dev/null || true
 	fi
-	rm -rf "$data"
+	[ -n "$data" ] && rm -rf "$data"
 	exit "$status"
 }
 trap cleanup EXIT INT TERM
 
-for i in $(seq 1 60); do
-	if curl -fs -o /dev/null "$url/status" || curl -s -o /dev/null -w '%{http_code}' "$url/" | grep -q 302; then
-		break
-	fi
-	sleep 1
-done
+openapi=
+if [ -n "${MONOKULO_OPENAPI:-}" ]; then
+	# Into the repository (the suite runs in the PHP container, which has it at /repo).
+	mkdir -p .phpunit.cache
+	cp "$MONOKULO_OPENAPI" .phpunit.cache/monokulo-openapi.json
+	openapi=/repo/.phpunit.cache/monokulo-openapi.json
+fi
 
-MONOKULO_URL=$url scripts/test smoke "$@"
+serve rates 8086 tests/Support/fake-rates.php
+
+echo "--- Monokulo at $direct ---"
+start "$direct"
+MONOKULO_URL=$direct MONOKULO_OPENAPI_FILE=$openapi scripts/test smoke "$@"
+stop
+rm -rf "$data"
+
+echo "--- Monokulo under a path, at $proxied/monokulo ---"
+serve proxy 8085 tests/Support/prefix-proxy.php -e PREFIX_PROXY_PREFIX=/monokulo -e PREFIX_PROXY_UPSTREAM="$direct"
+start "$proxied/monokulo"
+MONOKULO_URL=$proxied/monokulo MONOKULO_OPENAPI_FILE=$openapi scripts/test smoke "$@"

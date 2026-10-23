@@ -20,6 +20,8 @@ final class Text {
 		'text_address_first'        => 'Save your Monokulo address first, then connect.',
 		'text_connected'            => 'WHMCS is connected. Clients can now pay invoices with Monero.',
 		'text_webhook'              => 'Monokulo sends payment updates to %s.',
+		'text_onion'                => 'Clients on your shop\'s .onion address pay on your Monokulo\'s onion address, %s.',
+		'text_no_onion'             => 'Your Monokulo has no onion address: clients on a .onion address of your shop can\'t pay with Monero. If your Monokulo has one now, it shows here after the next payment, or connect again.',
 		'button_connect'            => 'Connect',
 		'button_reconnect'          => 'Connect again',
 		'error_address'             => 'Enter your Monokulo address as an http or https address, such as https://www.monokulo.com.',
@@ -27,6 +29,7 @@ final class Text {
 		'error_connect_host'        => 'The connect flow came back to a different address than it started from (did the System URL change?). Please connect again.',
 		'error_connect_finish'      => 'Monokulo did not hand over the store\'s keys. Please connect again; the Activity Log says why.',
 		'error_connect_unavailable' => 'Your Monokulo cannot connect shops yet: its operator has not set its public address.',
+		'error_connect_busy'        => 'Your Monokulo is busy right now. Wait a minute, then connect again.',
 		'error_connect_unreachable' => 'Your Monokulo could not be reached from this server. Check the address, then connect again.',
 		'error_connect_admin'       => 'Sign in to the WHMCS admin area, then press Connect again from the Monokulo gateway settings.',
 		'error_connect_link'        => 'This Connect link has expired. Open the Monokulo gateway settings again and press Connect.',
@@ -49,6 +52,7 @@ final class Text {
 		'error_generic'             => 'The Monero payment could not be started. Please try again, or contact us.',
 		'error_currency'            => 'This invoice\'s currency can\'t be paid in Monero right now. Please contact us.',
 		'error_unreachable'         => 'The Monero payment service could not be reached. Please try again shortly.',
+		'error_no_onion'            => 'Monero payments can\'t be made over Tor here yet. Please contact us to pay this invoice.',
 
 		// Gateway log (Billing > Gateway Log)
 		'note_started'              => 'Client sent to pay with Monero: %s',

@@ -1,6 +1,7 @@
 <?php
 namespace Monokulo\Whmcs\Tests\Module;
 
+use Monokulo\Whmcs\Order;
 use Monokulo\Whmcs\Repository;
 use Monokulo\Whmcs\Tests\Support\Calls;
 use Monokulo\Whmcs\Tests\Support\Vectors;
@@ -23,7 +24,7 @@ final class WebhookTest extends WhmcsTestCase {
 		Whmcs::connect('https://pay.example.com', Vectors::secret());
 		$this->invoice = Whmcs::invoice(['Hosting' => '100.00']);
 		// As Pay with Monero leaves it: the invoice mapped to the Monokulo order the vectors are about.
-		$this->repository()->recordOrder(Vectors::orderId(), $this->invoice, Whmcs::HOST, '100.00', 'USD', 0, 1760000000);
+		$this->repository()->recordOrder(new Order(Vectors::orderId(), 'https://pay.example.com/checkout/' . Vectors::orderId(), null, 'https://pay.example.com/monokulo/stores/st_1/orders/' . Vectors::orderId()), $this->invoice, Whmcs::HOST, '100.00', 'USD', 0, 1760000000);
 	}
 
 	private function repository(): Repository {
@@ -70,7 +71,7 @@ final class WebhookTest extends WhmcsTestCase {
 		$this->assertSame([], Whmcs::payments($this->invoice));
 	}
 
-	/** Paid: the payment on the invoice under the Monokulo order's id, and the log with the dashboard link. */
+	/** Paid: the payment on the invoice under the Monokulo order's id, and the log with the order's mk:dashboard-order link, as kept. */
 	public function test_paid_adds_the_payment_and_the_invoice_is_paid(): void {
 		$this->assertSame(200, $this->deliverVector('order.paid'));
 
@@ -82,7 +83,17 @@ final class WebhookTest extends WhmcsTestCase {
 		$this->assertStringContainsString('invoice => ' . $this->invoice, $log['data']);
 		$this->assertStringContainsString('event => order.paid', $log['data']);
 		$this->assertStringContainsString('amount => 100.00 USD', $log['data']);
-		$this->assertStringContainsString('in_monokulo => https://pay.example.com/stores/917701c2-15c7-4bcb-bbc8-72d9ab28e785/orders/' . Vectors::orderId(), $log['data']);
+		$this->assertStringContainsString('in_monokulo => https://pay.example.com/monokulo/stores/st_1/orders/' . Vectors::orderId(), $log['data']);
+	}
+
+	/** An order made before its dashboard link was kept (0.1.0): the log has no link rather than a built one. */
+	public function test_an_order_without_a_kept_dashboard_link_logs_none(): void {
+		Capsule::table('mod_monokulo_order')->update(['dashboard_url' => null]);
+
+		$this->assertSame(200, $this->deliverVector('order.paid'));
+
+		$this->assertSame('Paid', $this->lastLog()['result']);
+		$this->assertStringNotContainsString('in_monokulo', $this->lastLog()['data']);
 	}
 
 	public function test_paid_in_xmr_is_paid_too(): void {
@@ -197,7 +208,7 @@ final class WebhookTest extends WhmcsTestCase {
 	 * check the amount.
 	 */
 	public function test_paying_an_older_request_pays_the_invoice(): void {
-		$this->repository()->recordOrder('order_newer', $this->invoice, Whmcs::HOST, '120', 'USD', 0, 1760000001);
+		$this->repository()->recordOrder(new Order('order_newer', 'https://pay.example.com/checkout/order_newer'), $this->invoice, Whmcs::HOST, '120', 'USD', 0, 1760000001);
 
 		$this->assertSame(200, $this->deliverVector('order.paid'));
 
@@ -209,7 +220,7 @@ final class WebhookTest extends WhmcsTestCase {
 
 	/** Anything but a payment, from an order that isn't the invoice's newest, is a log entry only. */
 	public function test_other_events_from_an_older_request_are_log_entries_only(): void {
-		$this->repository()->recordOrder('order_newer', $this->invoice, Whmcs::HOST, '120', 'USD', 0, 1760000001);
+		$this->repository()->recordOrder(new Order('order_newer', 'https://pay.example.com/checkout/order_newer'), $this->invoice, Whmcs::HOST, '120', 'USD', 0, 1760000001);
 
 		foreach (['order.unconfirmed' => 'Payment seen', 'order.partial' => 'Part paid', 'order.expired' => 'Expired', 'order.double_spend_detected' => 'Double spend'] as $vector => $result) {
 			$this->assertSame(200, $this->deliverVector($vector));
@@ -236,7 +247,7 @@ final class WebhookTest extends WhmcsTestCase {
 	 * is paid too: nothing is added, and the merchant is told to refund it.
 	 */
 	public function test_a_second_payment_to_a_paid_invoice_is_logged_for_a_refund(): void {
-		$this->repository()->recordOrder('order_newer', $this->invoice, Whmcs::HOST, '100', 'USD', 1, 1760000001);
+		$this->repository()->recordOrder(new Order('order_newer', 'https://pay.example.com/checkout/order_newer'), $this->invoice, Whmcs::HOST, '100', 'USD', 1, 1760000001);
 		addInvoicePayment($this->invoice, 'order_newer', '100', 0, 'monokulo');
 		$this->assertSame('Paid', Whmcs::invoiceStatus($this->invoice));
 

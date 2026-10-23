@@ -30,13 +30,13 @@ final class PayTest extends WhmcsTestCase {
 		return self::query(Links::pay(Whmcs::URL, $repository->linkKey(), $invoice));
 	}
 
-	private function monokuloCreates(string $orderId = 'order_1', ?array $problem = null): void {
-		Api::serve(self::$monokulo, $orderId, $problem);
+	private function monokuloCreates(string $orderId = 'order_1', ?array $problem = null, string $prefix = '', bool $onion = false): void {
+		Api::serve(self::$monokulo, $orderId, $problem, $prefix, $onion);
 	}
 
 	/** @return list<array{method: string, path: string, query: string, headers: array<string, string>, body: string}> the orders WHMCS asked Monokulo for */
 	private function creates(): array {
-		return array_values(array_filter(self::$monokulo->requests(), static fn(array $r): bool => $r['method'] === 'POST' && $r['path'] === '/api/v1/orders'));
+		return array_values(array_filter(self::$monokulo->requests(), static fn(array $r): bool => $r['method'] === 'POST' && str_ends_with($r['path'], '/orders')));
 	}
 
 	/** @return array<string, mixed> */
@@ -217,21 +217,24 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertStringContainsString('could not reach', Whmcs::logs());
 	}
 
-	/** As a shop connected before Monokulo handed over its API's entry has it: the old `endpoint` column, no `api`. */
-	private static function connectedBeforeTheEntry(): void {
+	/** As a shop connected on 0.1.0 has it: no kept entry, no onion entry, no orders' dashboard links. */
+	private static function connectedOnTheLastVersion(): void {
 		$schema = Capsule::schema();
 		$schema->drop('mod_monokulo_connection');
 		$schema->create('mod_monokulo_connection', static function (\Illuminate\Database\Schema\Blueprint $t): void {
 			$t->string('host', 191)->primary();
-			$t->string('endpoint', 255);
+			$t->string('api', 255)->nullable();
 			$t->string('public_key', 128);
 			$t->string('secret_token', 255);
 			$t->string('webhook_secret', 255);
 			$t->integer('connected_at');
 		});
+		$schema->table('mod_monokulo_order', static function (\Illuminate\Database\Schema\Blueprint $t): void {
+			$t->dropColumn('dashboard_url');
+		});
 		Capsule::table('mod_monokulo_connection')->insert([
 			'host'           => Whmcs::HOST,
-			'endpoint'       => 'https://old-endpoint.example',
+			'api'            => self::$monokulo->url . '/api/v1',
 			'public_key'     => 'pk_test',
 			'secret_token'   => 'sk_test',
 			'webhook_secret' => 'whsec',
@@ -240,31 +243,102 @@ final class PayTest extends WhmcsTestCase {
 	}
 
 	/**
-	 * Upgraded without connecting again: the old endpoint goes, and the API's
-	 * entry is the saved Monokulo address's `/api/v1`, with the same secret key.
+	 * Upgraded from 0.1.0 without connecting again: the same key and entry,
+	 * the new columns added, the entry kept from then on, and Monokulo's
+	 * onion entry picked up from it.
 	 */
-	public function test_a_shop_connected_before_the_api_entry_keeps_working(): void {
-		self::connectedBeforeTheEntry();
+	public function test_a_shop_connected_on_the_last_version_keeps_working(): void {
+		self::connectedOnTheLastVersion();
 		$invoice = Whmcs::invoice();
-		$this->monokuloCreates();
+		$this->monokuloCreates(onion: true);
 
 		$response = $this->get($this->payLink($invoice));
 
 		$this->assertSame(self::$monokulo->url . '/checkout/order_1', $response->headers['Location']);
-		$this->assertSame('/api/v1', self::$monokulo->requests()[0]['path']);
 		$this->assertSame('Bearer sk_test', $this->creates()[0]['headers']['authorization']);
-		$this->assertFalse(Capsule::schema()->hasColumn('mod_monokulo_connection', 'endpoint'));
-		$this->assertEquals([['host' => Whmcs::HOST, 'api' => null, 'public_key' => 'pk_test', 'secret_token' => 'sk_test', 'webhook_secret' => 'whsec', 'connected_at' => 1760000000]], Whmcs::rows('mod_monokulo_connection'));
+		$row = Whmcs::rows('mod_monokulo_connection')[0];
+		$this->assertSame([Api::ONION . '/api/v1', Api::ETAG], [$row['onion_api'], $row['entry_etag']]);
+		$this->assertSame(self::$monokulo->url . '/stores/9f1c/orders/order_1', Whmcs::rows('mod_monokulo_order')[0]['dashboard_url']);
 	}
 
-	/** Without a saved Monokulo address there's no entry to derive: not connected, until it is saved. */
-	public function test_an_upgraded_shop_without_an_address_is_not_connected(): void {
-		self::connectedBeforeTheEntry();
-		Whmcs::setting('address', '');
-		$invoice = Whmcs::invoice();
+	/** The entry is kept: the next client's order is one request, and the order's dashboard link is kept with it. */
+	public function test_the_entry_is_kept_between_clients(): void {
+		$this->monokuloCreates('order_1');
+		$this->get($this->payLink(Whmcs::invoice()));
+		$this->monokuloCreates('order_2');
 
-		$this->assertSame(503, $this->get($this->payLink($invoice))->status);
-		$this->assertSame([], self::$monokulo->requests());
+		$this->get($this->payLink(Whmcs::invoice()));
+
+		$this->assertSame(['/api/v1', '/api/v1/orders', '/api/v1/orders'], array_column(self::$monokulo->requests(), 'path'));
+		$this->assertSame([self::$monokulo->url . '/stores/9f1c/orders/order_1', self::$monokulo->url . '/stores/9f1c/orders/order_2'], array_column(Whmcs::rows('mod_monokulo_order'), 'dashboard_url'));
+	}
+
+	/** The key was replaced in Monokulo since the entry was kept: read again, and the new key's form followed. */
+	public function test_a_kept_entry_refused_is_read_again(): void {
+		$this->monokuloCreates('order_1');
+		$this->get($this->payLink(Whmcs::invoice()));
+		$entry = Api::entry();
+		$entry['_templates']['create-order']['target'] = '/api/v1/orders-moved';
+		self::$monokulo->respond('GET', '/api/v1', 200, $entry, headers: ['ETag' => '"new"'] + Api::entryHeaders());
+		self::$monokulo->respond('POST', '/api/v1/orders', 405, Api::problem('method-not-allowed', 405, 'Method not allowed', 'moved'), headers: ['Content-Type' => Api::PROBLEM]);
+		self::$monokulo->respond('POST', '/api/v1/orders-moved', 201, Api::order('order_2'));
+
+		$response = $this->get($this->payLink(Whmcs::invoice()));
+
+		$this->assertSame(self::$monokulo->url . '/checkout/order_2', $response->headers['Location']);
+		$this->assertSame(['/api/v1', '/api/v1/orders', '/api/v1/orders', '/api/v1', '/api/v1/orders-moved'], array_column(self::$monokulo->requests(), 'path'));
+		$this->assertSame('"new"', Whmcs::rows('mod_monokulo_connection')[0]['entry_etag']);
+	}
+
+	/** A Monokulo under a path: the entry, the form and the checkout all keep it. */
+	public function test_a_monokulo_under_a_path(): void {
+		Capsule::table('mod_monokulo_connection')->update(['api' => self::$monokulo->url . '/monokulo/api/v1']);
+		$this->monokuloCreates(prefix: '/monokulo');
+
+		$response = $this->get($this->payLink(Whmcs::invoice()));
+
+		$this->assertSame(self::$monokulo->url . '/monokulo/checkout/order_1', $response->headers['Location']);
+		$this->assertSame(['/monokulo/api/v1', '/monokulo/api/v1/orders'], array_column(self::$monokulo->requests(), 'path'));
+	}
+
+	private const ONION_SHOP = 'http://shopabcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuv.onion';
+
+	/** A client on the shop's onion address: sent to the order's checkout on Monokulo's onion address. */
+	public function test_a_client_on_the_shops_onion_address_pays_over_tor(): void {
+		$invoice = Whmcs::invoice();
+		$this->monokuloCreates(onion: true);
+
+		$response = $this->call(new \Monokulo\Whmcs\Request('GET', $this->payLink($invoice), origin: self::ONION_SHOP));
+
+		$this->assertSame(303, $response->status);
+		$this->assertSame(Api::ONION . '/checkout/order_1', $response->headers['Location']);
+		$this->assertStringContainsString('Client sent to pay with Monero: ' . Api::ONION . '/checkout/order_1', Whmcs::gatewayLog()[0]['data']);
+		$this->assertStringContainsString('over Tor', Whmcs::logs());
+	}
+
+	/** A client on the shop's web address goes to the web checkout, even when there's an onion one. */
+	public function test_a_client_on_the_web_address_pays_on_the_web(): void {
+		$this->monokuloCreates(onion: true);
+
+		$response = $this->call(new \Monokulo\Whmcs\Request('GET', $this->payLink(Whmcs::invoice()), origin: 'http://localhost:8091'));
+
+		$this->assertSame(self::$monokulo->url . '/checkout/order_1', $response->headers['Location']);
+	}
+
+	/** Monokulo has no onion address: the Tor client is told, never sent to the web, and the merchant warned. */
+	public function test_a_client_on_tor_is_not_sent_to_the_web_when_monokulo_has_no_onion_address(): void {
+		$invoice = Whmcs::invoice();
+		$this->monokuloCreates();
+
+		$response = $this->call(new \Monokulo\Whmcs\Request('GET', $this->payLink($invoice), origin: self::ONION_SHOP));
+
+		$this->assertSame(503, $response->status);
+		$this->assertArrayNotHasKey('Location', $response->headers);
+		$this->assertStringContainsString('can&#039;t be made over Tor here yet', $response->body);
+		$this->assertStringContainsString('href="' . self::ONION_SHOP . '/viewinvoice.php?id=' . $invoice . '"', $response->body, 'back to the invoice on the onion address');
+		$this->assertStringNotContainsString(self::$monokulo->url, $response->body);
+		$this->assertStringContainsString('your Monokulo has no onion address', Whmcs::logs());
+		$this->assertSame([], Whmcs::gatewayLog(), 'not sent to pay');
 	}
 
 	/** With "Send errors to Monokulo" on, the merchant's warning goes to Monokulo too, with its trace. */

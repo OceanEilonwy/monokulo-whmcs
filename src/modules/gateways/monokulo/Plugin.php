@@ -8,7 +8,7 @@ namespace Monokulo\Whmcs;
  */
 final class Plugin {
 	/** Kept equal to VERSION by a test. */
-	public const VERSION = '0.1.0';
+	public const VERSION = '0.2.0';
 
 	/** The connect path's platform slug: `/plugins/connect/whmcs`. */
 	public const SLUG = 'whmcs';

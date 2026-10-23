@@ -8,9 +8,12 @@ namespace Monokulo\Whmcs;
  * Monokulo store is one host: the connection is kept by the host of WHMCS's
  * System URL, so changing that URL means connecting again.
  *
- * `api` is the API's entry (`https://monokulo.example/api/v1`): every other
- * address the gateway calls is a link or form from there, resolved against
- * it, and the secret key picks the store.
+ * `api` is the API's entry (`https://monokulo.example/api/v1`, or
+ * `https://example.com/monokulo/api/v1` for a Monokulo served under a
+ * path): every other address the gateway calls is a link or form from
+ * there, and the secret key picks the store. `onionApi` is the same entry
+ * on Monokulo's onion address, while it has one (null otherwise, and for a
+ * shop connected before Monokulo handed it over, until the entry is read).
  */
 final class Connection {
 	public function __construct(
@@ -20,19 +23,7 @@ final class Connection {
 		public readonly string $secretToken,
 		public readonly string $webhookSecret,
 		public readonly int $connectedAt,
+		public readonly ?string $onionApi = null,
 	) {
-	}
-
-	/**
-	 * Where the gateway sends its warnings and errors. The entry doesn't
-	 * link to it, so it is the one address made here: the entry's `logs`.
-	 */
-	public function logsUrl(): string {
-		return rtrim($this->api, '/') . '/logs';
-	}
-
-	/** The order's page in the merchant's Monokulo, on the API's host. */
-	public function dashboardOrderUrl(string $storeId, string $orderId): string {
-		return Url::resolve($this->api, '/stores/' . rawurlencode($storeId) . '/orders/' . rawurlencode($orderId));
 	}
 }

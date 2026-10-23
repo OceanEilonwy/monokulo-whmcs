@@ -2,22 +2,42 @@
 # machine's network, where the stand-in WHMCS is http://localhost:8091/.
 #
 # - public_uri: Monokulo's own address, where the connect flow's pages
-#   are. Without it Monokulo can't connect plugins.
+#   are. Without it Monokulo can't connect plugins. scripts/smoke runs the
+#   suite a second time with Monokulo under a path
+#   (--public-uri http://localhost:8085/monokulo, behind
+#   tests/Support/prefix-proxy.php).
+# - tor: an onion address, as an external tor's would be, so orders carry
+#   their checkout there and the handshake hands over the onion entry.
+#   Nothing connects to the listener: the test never goes over Tor itself.
 # - webhooks.allow_private_urls: the webhook address is on this machine;
 #   Monokulo refuses private addresses unless told otherwise.
 # - signup: anyone can make an account (the test signs up a merchant).
+# - exchange_rate: prices from a stand-in for CoinGecko on this machine
+#   (tests/Support/fake-rates.php, started by scripts/smoke), so orders
+#   don't depend on, or get rate limited by, the real one.
 # - engine.monero_node: a wallet can only be added on a network with a node.
 #   Nothing is paid in the smoke test, so the node needn't answer.
 public_uri = "http://localhost:8083"
+onion_uri = "http://2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion"
 
 [server]
 bind = "127.0.0.1:8083"
+
+[tor]
+mode = "external"
+
+[abuse]
+onion_listener = "127.0.0.1:8084"
 
 [signup]
 mode = "public"
 
 [webhooks]
 allow_private_urls = true
+
+[exchange_rate]
+coingecko_base_url = "http://localhost:8086"
+coinmarketcap_enabled = false
 
 [engine.monero_node]
 mainnet = { host = "127.0.0.1", port = 18089, ssl = false }
