@@ -40,7 +40,6 @@ final class Repository {
 				$t->string('public_key', 128);
 				$t->string('secret_token', 255);
 				$t->string('webhook_secret', 255);
-				$t->string('connection_version', 16);
 				$t->integer('connected_at');
 			},
 			'mod_monokulo_order' => static function (Blueprint $t): void {
@@ -89,7 +88,6 @@ final class Repository {
 			$row->public_key,
 			$row->secret_token,
 			$row->webhook_secret,
-			$row->connection_version,
 			(int)$row->connected_at,
 		);
 	}
@@ -100,7 +98,6 @@ final class Repository {
 			'public_key'         => $c->publicKey,
 			'secret_token'       => $c->secretToken,
 			'webhook_secret'     => $c->webhookSecret,
-			'connection_version' => $c->version,
 			'connected_at'       => $c->connectedAt,
 		]);
 	}

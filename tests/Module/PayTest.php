@@ -162,10 +162,10 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertSame(404, $this->get($this->payLink($invoice))->status);
 	}
 
-	/** Disconnected since the invoice was shown (or connected by an older version): the client is told, the merchant warned. */
+	/** Disconnected since the invoice was shown: the client is told, the merchant warned. */
 	public function test_not_connected_tells_the_client_and_warns_the_merchant(): void {
 		$invoice = Whmcs::invoice();
-		Capsule::table('mod_monokulo_connection')->update(['connection_version' => '0']);
+		Capsule::table('mod_monokulo_connection')->delete();
 
 		$response = $this->get($this->payLink($invoice));
 

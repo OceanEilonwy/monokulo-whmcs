@@ -76,7 +76,7 @@ final class Callback {
 		}
 		$back = $this->systemUrl . 'viewinvoice.php?id=' . $invoiceId;
 		$connection = $this->connection();
-		if (!$connection || $connection->needsReconnect()) {
+		if (!$connection) {
 			$this->log->error(sprintf('Invoice %d: a client wanted to pay with Monero, but WHMCS is not connected to Monokulo (connect it from the gateway settings).', $invoiceId));
 
 			return Response::page(503, 'error_not_connected', $back);
@@ -181,7 +181,7 @@ final class Callback {
 			return 'monokulo_connect_error=unreachable';
 		}
 
-		$this->connection = new Connection($host, $credentials['endpoint'], $credentials['public_key'], $credentials['secret_token'], $credentials['webhook_signing_secret'], Plugin::CONNECTION_VERSION, $this->now);
+		$this->connection = new Connection($host, $credentials['endpoint'], $credentials['public_key'], $credentials['secret_token'], $credentials['webhook_signing_secret'], $this->now);
 		$this->connectionRead = true;
 		$this->repository->saveConnection($this->connection);
 		$this->log->info(sprintf('%s connected to Monokulo as %s.', $host, $credentials['public_key']));

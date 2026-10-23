@@ -84,7 +84,7 @@ final class Gateway {
 		$repository->install();
 		$systemUrl = $this->whmcs->systemUrl();
 		$connection = $repository->connection(ConnectLink::host($systemUrl));
-		if (!$connection || $connection->needsReconnect()) {
+		if (!$connection) {
 			return '<p>' . Text::html('text_unavailable') . '</p>';
 		}
 		$url = Links::pay($systemUrl, $repository->linkKey(), (int)$params['invoiceid']);
@@ -111,8 +111,6 @@ final class Gateway {
 
 		if (!$connection) {
 			$lines[] = Text::html('text_not_connected');
-		} elseif ($connection->needsReconnect()) {
-			$lines[] = Text::html('text_reconnect_needed');
 		} else {
 			$lines[] = Text::escape(sprintf(Text::get('text_connected_as'), $connection->publicKey, date('Y-m-d H:i', $connection->connectedAt)));
 		}
