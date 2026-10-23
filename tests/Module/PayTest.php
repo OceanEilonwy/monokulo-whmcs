@@ -4,6 +4,7 @@ namespace Monokulo\Whmcs\Tests\Module;
 use Monokulo\Whmcs\Links;
 use Monokulo\Whmcs\Plugin;
 use Monokulo\Whmcs\Repository;
+use Monokulo\Whmcs\Tests\Support\Api;
 use Monokulo\Whmcs\Tests\Support\Calls;
 use Monokulo\Whmcs\Tests\Support\FakeMonokulo;
 use Monokulo\Whmcs\Tests\Support\Whmcs;
@@ -29,13 +30,18 @@ final class PayTest extends WhmcsTestCase {
 		return self::query(Links::pay(Whmcs::URL, $repository->linkKey(), $invoice));
 	}
 
-	private function monokuloCreates(string $orderId = 'ord_1', int $status = 200): void {
-		self::$monokulo->respond('POST', '/pay/pk_test/orders', $status, $status === 200 ? ['order_id' => $orderId, 'address' => '4…', 'expires_at' => 1] : ['error' => 'nope']);
+	private function monokuloCreates(string $orderId = 'order_1', ?array $problem = null): void {
+		Api::serve(self::$monokulo, $orderId, $problem);
+	}
+
+	/** @return list<array{method: string, path: string, query: string, headers: array<string, string>, body: string}> the orders WHMCS asked Monokulo for */
+	private function creates(): array {
+		return array_values(array_filter(self::$monokulo->requests(), static fn(array $r): bool => $r['method'] === 'POST' && $r['path'] === '/api/v1/orders'));
 	}
 
 	/** @return array<string, mixed> */
 	private function sent(int $i = 0): array {
-		return json_decode(self::$monokulo->requests()[$i]['body'], true);
+		return json_decode($this->creates()[$i]['body'], true);
 	}
 
 	public function test_the_client_is_sent_to_pay_the_invoice_balance(): void {
@@ -45,7 +51,7 @@ final class PayTest extends WhmcsTestCase {
 		$response = $this->get($this->payLink($invoice));
 
 		$this->assertSame(303, $response->status);
-		$this->assertSame(self::$monokulo->url . '/pay/pk_test/orders/ord_1', $response->headers['Location']);
+		$this->assertSame(self::$monokulo->url . '/checkout/order_1', $response->headers['Location']);
 		$this->assertSame([
 			'amount'                 => '100.50',
 			'currency'               => 'EUR',
@@ -54,16 +60,16 @@ final class PayTest extends WhmcsTestCase {
 			'description'            => 'Invoice #' . $invoice . ': Starter - example.com + 2 more',
 			'idempotency_key'        => 'whmcs:' . $invoice . ':100.50:EUR:0',
 		], $this->sent());
-		$request = self::$monokulo->requests()[0];
+		$request = $this->creates()[0];
 		$this->assertSame('Bearer sk_test', $request['headers']['authorization']);
 		$this->assertSame('whmcs/' . Plugin::VERSION, $request['headers']['monokulo-client']);
 
-		$this->assertSame([['monokulo_order_id' => 'ord_1', 'invoice_id' => $invoice, 'amount' => '100.50', 'currency' => 'EUR', 'attempt' => 0, 'expired' => 0]], array_map(static fn(array $r): array => array_intersect_key($r, array_flip(['monokulo_order_id', 'invoice_id', 'amount', 'currency', 'attempt', 'expired'])), Whmcs::rows('mod_monokulo_order')));
+		$this->assertSame([['monokulo_order_id' => 'order_1', 'invoice_id' => $invoice, 'amount' => '100.50', 'currency' => 'EUR', 'attempt' => 0, 'expired' => 0]], array_map(static fn(array $r): array => array_intersect_key($r, array_flip(['monokulo_order_id', 'invoice_id', 'amount', 'currency', 'attempt', 'expired'])), Whmcs::rows('mod_monokulo_order')));
 		$this->assertSame('Unpaid', Whmcs::invoiceStatus($invoice), 'nothing paid yet');
 		$log = Whmcs::gatewayLog();
 		$this->assertCount(1, $log);
 		$this->assertSame('Sent to pay', $log[0]['result']);
-		$this->assertStringContainsString('Client sent to pay with Monero: ' . self::$monokulo->url . '/pay/pk_test/orders/ord_1', $log[0]['data']);
+		$this->assertStringContainsString('Client sent to pay with Monero: ' . self::$monokulo->url . '/checkout/order_1', $log[0]['data']);
 	}
 
 	/** Part paid already (by credit, say): only the balance is asked for. */
@@ -105,12 +111,12 @@ final class PayTest extends WhmcsTestCase {
 	/** After the first order expired, paying again is a new attempt: a new key, a new order. */
 	public function test_after_an_order_expired_paying_again_starts_a_new_one(): void {
 		$invoice = Whmcs::invoice();
-		$this->monokuloCreates('ord_1');
+		$this->monokuloCreates('order_1');
 		$this->get($this->payLink($invoice));
-		(new Repository(Capsule::connection()))->markExpired('ord_1');
-		$this->monokuloCreates('ord_2');
+		(new Repository(Capsule::connection()))->markExpired('order_1');
+		$this->monokuloCreates('order_2');
 
-		$this->assertSame(self::$monokulo->url . '/pay/pk_test/orders/ord_2', $this->get($this->payLink($invoice))->headers['Location']);
+		$this->assertSame(self::$monokulo->url . '/checkout/order_2', $this->get($this->payLink($invoice))->headers['Location']);
 
 		$this->assertSame('whmcs:' . $invoice . ':100.00:USD:1', $this->sent(1)['idempotency_key']);
 		$this->assertSame([0, 1], array_column(Whmcs::rows('mod_monokulo_order'), 'attempt'));
@@ -177,16 +183,18 @@ final class PayTest extends WhmcsTestCase {
 
 	public static function monokuloFailures(): array {
 		return [
-			'rate limited' => [429, 'Monero payments are busy right now', 'rate limited'],
-			'key refused'  => [401, 'Monero payments are not available right now', 'connect again from the Monokulo gateway settings'],
-			'unknown key'  => [404, 'could not be started', 'connect the store again'],
+			'rate limited'     => [Api::problem('rate-limited', 429, 'Too many requests', 'Wait 5 seconds.'), 'Monero payments are busy right now', 'rate limited'],
+			'key refused'      => [Api::problem('unauthorized', 401, 'No valid key', 'This key was not accepted.'), 'Monero payments are not available right now', 'connect again from the Monokulo gateway settings'],
+			'unknown currency' => [Api::problem('invalid-amount', 400, 'The order can\'t be priced', 'unknown currency: ABC'), 'currency can&#039;t be paid in Monero', 'unknown currency: ABC'],
+			'engine down'      => [Api::problem('engine-unavailable', 503, 'Payment engine unavailable', 'busy'), 'Monero payments are busy right now', 'https://docs.monokulo.com/problems/engine-unavailable'],
 		];
 	}
 
 	#[\PHPUnit\Framework\Attributes\DataProvider('monokuloFailures')]
-	public function test_when_monokulo_refuses_the_client_is_told_and_the_merchant_given_a_hint(int $status, string $client, string $hint): void {
+	public function test_when_monokulo_refuses_the_client_is_told_and_the_merchant_given_a_hint(array $problem, string $client, string $hint): void {
+		$status = $problem['status'];
 		$invoice = Whmcs::invoice();
-		$this->monokuloCreates(status: $status);
+		$this->monokuloCreates(problem: $problem);
 
 		$response = $this->get($this->payLink($invoice));
 
@@ -199,7 +207,7 @@ final class PayTest extends WhmcsTestCase {
 	}
 
 	public function test_an_unreachable_monokulo_is_reported(): void {
-		Capsule::table('mod_monokulo_connection')->update(['endpoint' => 'http://127.0.0.1:' . FakeMonokulo::freePort()]);
+		Capsule::table('mod_monokulo_connection')->update(['api' => 'http://127.0.0.1:' . FakeMonokulo::freePort() . '/api/v1']);
 		$invoice = Whmcs::invoice();
 
 		$response = $this->get($this->payLink($invoice));
@@ -209,31 +217,81 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertStringContainsString('could not reach', Whmcs::logs());
 	}
 
+	/** As a shop connected before Monokulo handed over its API's entry has it: the old `endpoint` column, no `api`. */
+	private static function connectedBeforeTheEntry(): void {
+		$schema = Capsule::schema();
+		$schema->drop('mod_monokulo_connection');
+		$schema->create('mod_monokulo_connection', static function (\Illuminate\Database\Schema\Blueprint $t): void {
+			$t->string('host', 191)->primary();
+			$t->string('endpoint', 255);
+			$t->string('public_key', 128);
+			$t->string('secret_token', 255);
+			$t->string('webhook_secret', 255);
+			$t->integer('connected_at');
+		});
+		Capsule::table('mod_monokulo_connection')->insert([
+			'host'           => Whmcs::HOST,
+			'endpoint'       => 'https://old-endpoint.example',
+			'public_key'     => 'pk_test',
+			'secret_token'   => 'sk_test',
+			'webhook_secret' => 'whsec',
+			'connected_at'   => 1760000000,
+		]);
+	}
+
+	/**
+	 * Upgraded without connecting again: the old endpoint goes, and the API's
+	 * entry is the saved Monokulo address's `/api/v1`, with the same secret key.
+	 */
+	public function test_a_shop_connected_before_the_api_entry_keeps_working(): void {
+		self::connectedBeforeTheEntry();
+		$invoice = Whmcs::invoice();
+		$this->monokuloCreates();
+
+		$response = $this->get($this->payLink($invoice));
+
+		$this->assertSame(self::$monokulo->url . '/checkout/order_1', $response->headers['Location']);
+		$this->assertSame('/api/v1', self::$monokulo->requests()[0]['path']);
+		$this->assertSame('Bearer sk_test', $this->creates()[0]['headers']['authorization']);
+		$this->assertFalse(Capsule::schema()->hasColumn('mod_monokulo_connection', 'endpoint'));
+		$this->assertEquals([['host' => Whmcs::HOST, 'api' => null, 'public_key' => 'pk_test', 'secret_token' => 'sk_test', 'webhook_secret' => 'whsec', 'connected_at' => 1760000000]], Whmcs::rows('mod_monokulo_connection'));
+	}
+
+	/** Without a saved Monokulo address there's no entry to derive: not connected, until it is saved. */
+	public function test_an_upgraded_shop_without_an_address_is_not_connected(): void {
+		self::connectedBeforeTheEntry();
+		Whmcs::setting('address', '');
+		$invoice = Whmcs::invoice();
+
+		$this->assertSame(503, $this->get($this->payLink($invoice))->status);
+		$this->assertSame([], self::$monokulo->requests());
+	}
+
 	/** With "Send errors to Monokulo" on, the merchant's warning goes to Monokulo too, with its trace. */
 	public function test_errors_are_forwarded_when_the_merchant_asked(): void {
 		Whmcs::setting('forwardErrors', 'on');
 		$invoice = Whmcs::invoice();
-		$this->monokuloCreates(status: 429);
-		self::$monokulo->respond('POST', '/pay/pk_test/logs', 204, '');
+		$this->monokuloCreates(problem: Api::problem('rate-limited', 429, 'Too many requests', 'Wait.'));
+		self::$monokulo->respond('POST', '/api/v1/logs', 204, '');
 
 		$this->get($this->payLink($invoice));
 
 		$requests = self::$monokulo->requests();
-		$this->assertSame('/pay/pk_test/logs', $requests[1]['path']);
-		$entries = json_decode($requests[1]['body'], true)['entries'];
+		$this->assertSame('/api/v1/logs', $requests[2]['path']);
+		$entries = json_decode($requests[2]['body'], true)['entries'];
 		$this->assertSame('error', $entries[0]['level']);
 		$this->assertStringContainsString('HTTP 429', $entries[0]['message']);
 		$this->assertStringContainsString('[trace ' . $entries[0]['trace_id'] . ']', Whmcs::logs());
-		$this->assertStringContainsString('00-' . $entries[0]['trace_id'] . '-', $requests[0]['headers']['traceparent'], 'the order request carried the same trace');
+		$this->assertStringContainsString('00-' . $entries[0]['trace_id'] . '-', $requests[1]['headers']['traceparent'], 'the order request carried the same trace');
 	}
 
 	public function test_errors_stay_in_whmcs_otherwise(): void {
 		$invoice = Whmcs::invoice();
-		$this->monokuloCreates(status: 429);
+		$this->monokuloCreates(problem: Api::problem('rate-limited', 429, 'Too many requests', 'Wait.'));
 
 		$this->get($this->payLink($invoice));
 
-		$this->assertCount(1, self::$monokulo->requests());
+		$this->assertSame(['/api/v1', '/api/v1/orders'], array_column(self::$monokulo->requests(), 'path'));
 	}
 
 	public function test_an_unknown_action_is_not_found(): void {

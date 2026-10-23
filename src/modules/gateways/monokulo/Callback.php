@@ -100,23 +100,22 @@ final class Callback {
 
 			return Response::page(502, $e->customerMessageKey(), $back);
 		} catch (TransportError $e) {
-			$this->log->error(sprintf('Creating the Monokulo order for invoice %d failed: could not reach %s: %s', $invoiceId, $connection->ordersUrl(), $e->getMessage()));
+			$this->log->error(sprintf('Creating the Monokulo order for invoice %d failed: could not reach %s: %s', $invoiceId, $connection->api, $e->getMessage()));
 
 			return Response::page(502, 'error_unreachable', $back);
 		}
 
-		$checkout = $connection->checkoutUrl($order['order_id']);
-		if ($this->repository->recordOrder($order['order_id'], $invoiceId, $connection->host, $body['amount'], $body['currency'], $attempt, $this->now)) {
+		if ($this->repository->recordOrder($order->id, $invoiceId, $connection->host, $body['amount'], $body['currency'], $attempt, $this->now)) {
 			$this->whmcs->gatewayLog([
 				'invoice'        => (string)$invoiceId,
-				'monokulo_order' => $order['order_id'],
+				'monokulo_order' => $order->id,
 				'amount'         => $body['amount'] . ' ' . $body['currency'],
-				'note'           => sprintf(Text::get('note_started'), $checkout),
+				'note'           => sprintf(Text::get('note_started'), $order->checkoutUrl),
 			], 'Sent to pay');
 		}
-		$this->log->info(sprintf('Invoice %d: client sent to Monokulo order %s.', $invoiceId, $order['order_id']));
+		$this->log->info(sprintf('Invoice %d: client sent to Monokulo order %s.', $invoiceId, $order->id));
 
-		return Response::redirect($checkout);
+		return Response::redirect($order->checkoutUrl);
 	}
 
 	/**
@@ -183,7 +182,7 @@ final class Callback {
 			return 'monokulo_connect_error=unreachable';
 		}
 
-		$this->connection = new Connection($host, $credentials['endpoint'], $credentials['public_key'], $credentials['secret_token'], $credentials['webhook_signing_secret'], $this->now);
+		$this->connection = new Connection($host, $credentials['api'], $credentials['public_key'], $credentials['secret_token'], $credentials['webhook_signing_secret'], $this->now);
 		$this->connectionRead = true;
 		$this->repository->saveConnection($this->connection);
 		$this->log->info(sprintf('%s connected to Monokulo as %s.', $host, $credentials['public_key']));
@@ -194,7 +193,7 @@ final class Callback {
 	/** This WHMCS's connection, or null before it has connected. */
 	private function connection(): ?Connection {
 		if (!$this->connectionRead) {
-			$this->connection = $this->repository->connection(ConnectLink::host($this->systemUrl));
+			$this->connection = $this->repository->connection(ConnectLink::host($this->systemUrl), (string)($this->gateway['address'] ?? ''));
 			$this->connectionRead = true;
 		}
 

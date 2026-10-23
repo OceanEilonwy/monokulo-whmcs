@@ -62,7 +62,7 @@ final class AdminAndInvoiceOverHttpTest extends TestCase {
 		$this->assertSame(Whmcs::CALLBACK . '?action=return', $query['return_url']);
 
 		// Monokulo sends the browser back with a token, which WHMCS redeems.
-		self::$monokulo->respond('POST', '/plugins/connect/whmcs/finish', 200, ['public_key' => 'pk_http', 'secret_token' => 'sk_http', 'endpoint' => self::$monokulo->url, 'webhook_signing_secret' => 'whsec_http']);
+		self::$monokulo->respond('POST', '/plugins/connect/whmcs/finish', 200, ['public_key' => 'pk_http', 'secret_token' => 'sk_http', 'api' => '/api/v1', 'webhook_signing_secret' => 'whsec_http']);
 		$back = $this->browser->get(Whmcs::CALLBACK . '?action=return&token=tok_1&nonce=' . $query['nonce']);
 		$this->assertSame(self::SETTINGS . '?monokulo_connected=1', $back->location());
 
@@ -94,7 +94,7 @@ final class AdminAndInvoiceOverHttpTest extends TestCase {
 	public function test_a_client_pays_an_invoice_over_http(): void {
 		Whmcs::connect(self::$monokulo->url, 'whsec');
 		$invoice = Whmcs::invoice(['Hosting' => '25.00'], 'EUR');
-		self::$monokulo->respond('POST', '/pay/pk_test/orders', 200, ['order_id' => 'ord_http']);
+		\Monokulo\Whmcs\Tests\Support\Api::serve(self::$monokulo, 'order_http');
 
 		$page = $this->browser->get(Whmcs::URL . 'viewinvoice.php?id=' . $invoice);
 		$this->assertMatchesRegularExpression('#<a href="([^"]+)" class="btn btn-success">Pay with Monero</a>#', $page->body);
@@ -102,8 +102,8 @@ final class AdminAndInvoiceOverHttpTest extends TestCase {
 		$pay = $this->browser->get(html_entity_decode($m[1], ENT_QUOTES));
 
 		$this->assertSame(303, $pay->status);
-		$this->assertSame(self::$monokulo->url . '/pay/pk_test/orders/ord_http', $pay->location());
-		$this->assertSame('25.00', json_decode(self::$monokulo->requests()[0]['body'], true)['amount']);
+		$this->assertSame(self::$monokulo->url . '/checkout/order_http', $pay->location());
+		$this->assertSame('25.00', json_decode(self::$monokulo->requests()[1]['body'], true)['amount']);
 	}
 
 	public function test_a_tampered_pay_link_is_refused_over_http(): void {

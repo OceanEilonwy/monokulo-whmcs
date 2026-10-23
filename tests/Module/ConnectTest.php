@@ -21,7 +21,7 @@ final class ConnectTest extends WhmcsTestCase {
 	use Calls;
 
 	private const ADMIN = Whmcs::URL . 'admin/configgateways.php';
-	private const CREDENTIALS = ['public_key' => 'pk_new', 'secret_token' => 'sk_new', 'endpoint' => 'https://pay.example.com', 'webhook_signing_secret' => 'whsec_new'];
+	private const CREDENTIALS = ['public_key' => 'pk_new', 'secret_token' => 'sk_new', 'api' => '/api/v1', 'webhook_signing_secret' => 'whsec_new'];
 
 	private function repository(): Repository {
 		return new Repository(Capsule::connection());
@@ -111,8 +111,9 @@ final class ConnectTest extends WhmcsTestCase {
 		$this->assertSame(['token' => 'tok_1', 'webhook_url' => Whmcs::CALLBACK, 'name' => 'WHMCS'], json_decode($request['body'], true));
 		$this->assertSame('whmcs/' . Plugin::VERSION, $request['headers']['monokulo-client']);
 
-		$connection = $this->repository()->connection(Whmcs::HOST);
-		$this->assertSame(['https://pay.example.com', 'pk_new', 'sk_new', 'whsec_new'], [$connection->endpoint, $connection->publicKey, $connection->secretToken, $connection->webhookSecret]);
+		$connection = $this->repository()->connection(Whmcs::HOST, self::$monokulo->url);
+		$this->assertSame([self::$monokulo->url . '/api/v1', 'pk_new', 'sk_new', 'whsec_new'], [$connection->api, $connection->publicKey, $connection->secretToken, $connection->webhookSecret]);
+		$this->assertSame(self::$monokulo->url . '/api/v1', Whmcs::rows('mod_monokulo_connection')[0]['api'], 'the entry is kept, resolved against the address');
 		$this->assertStringContainsString('localhost:8091 connected to Monokulo as pk_new', Whmcs::logs());
 	}
 
@@ -123,7 +124,7 @@ final class ConnectTest extends WhmcsTestCase {
 
 		$this->get(['action' => 'return', 'token' => 'tok_1', 'nonce' => $this->nonce()]);
 
-		$this->assertSame('pk_new', $this->repository()->connection(Whmcs::HOST)->publicKey);
+		$this->assertSame('pk_new', $this->repository()->connection(Whmcs::HOST, self::$monokulo->url)->publicKey);
 		$this->assertCount(1, Whmcs::rows('mod_monokulo_connection'));
 	}
 
@@ -138,7 +139,7 @@ final class ConnectTest extends WhmcsTestCase {
 		$this->assertSame(400, $again->status);
 		$this->assertArrayNotHasKey('Location', $again->headers);
 		$this->assertStringContainsString('already been used or has expired', $again->body);
-		$this->assertNull($this->repository()->connection(Whmcs::HOST));
+		$this->assertNull($this->repository()->connection(Whmcs::HOST, self::$monokulo->url));
 		$this->assertCount(1, self::$monokulo->requests(), 'the token was not sent twice');
 	}
 
@@ -185,7 +186,8 @@ final class ConnectTest extends WhmcsTestCase {
 		return [
 			'no public address yet' => [503, ['error' => 'no public address'], 'unavailable'],
 			'token refused'         => [401, '', 'finish'],
-			'missing secret'        => [200, ['public_key' => 'pk', 'secret_token' => 'sk', 'endpoint' => 'https://x'], 'finish'],
+			'missing secret'        => [200, ['public_key' => 'pk', 'secret_token' => 'sk', 'api' => '/api/v1'], 'finish'],
+			'missing entry'         => [200, ['public_key' => 'pk', 'secret_token' => 'sk', 'webhook_signing_secret' => 'wh'], 'finish'],
 		];
 	}
 
@@ -196,7 +198,7 @@ final class ConnectTest extends WhmcsTestCase {
 		$response = $this->get(['action' => 'return', 'token' => 'tok_1', 'nonce' => $this->nonce()]);
 
 		$this->assertSame(self::ADMIN . '?monokulo_connect_error=' . $error, $response->headers['Location']);
-		$this->assertNull($this->repository()->connection(Whmcs::HOST));
+		$this->assertNull($this->repository()->connection(Whmcs::HOST, self::$monokulo->url));
 		$this->assertStringContainsString('Connect finish at ' . self::$monokulo->url . ' failed: HTTP ' . $status, Whmcs::logs());
 	}
 

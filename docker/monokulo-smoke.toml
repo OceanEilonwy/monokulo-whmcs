@@ -1,8 +1,8 @@
 # Monokulo for the smoke test (scripts/smoke): a fresh instance on this
 # machine's network, where the stand-in WHMCS is http://localhost:8091/.
 #
-# - public_uri: what plugins are given as their endpoint, and where the
-#   connect flow's pages are. Without it Monokulo can't connect plugins.
+# - public_uri: Monokulo's own address, where the connect flow's pages
+#   are. Without it Monokulo can't connect plugins.
 # - webhooks.allow_private_urls: the webhook address is on this machine;
 #   Monokulo refuses private addresses unless told otherwise.
 # - signup: anyone can make an account (the test signs up a merchant).

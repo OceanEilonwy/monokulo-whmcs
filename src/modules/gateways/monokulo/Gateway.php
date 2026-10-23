@@ -85,7 +85,7 @@ final class Gateway {
 		$repository = new Repository($this->whmcs->db());
 		$repository->install();
 		$systemUrl = $this->whmcs->systemUrl();
-		$connection = $repository->connection(ConnectLink::host($systemUrl));
+		$connection = $repository->connection(ConnectLink::host($systemUrl), $this->whmcs->setting('address'));
 		if (!$connection) {
 			return '<p>' . Text::html('text_unavailable') . '</p>';
 		}
@@ -100,7 +100,7 @@ final class Gateway {
 		$repository = new Repository($this->whmcs->db());
 		$repository->install();
 		$systemUrl = $this->whmcs->systemUrl();
-		$connection = $repository->connection(ConnectLink::host($systemUrl));
+		$connection = $repository->connection(ConnectLink::host($systemUrl), $this->whmcs->setting('address'));
 		$lines = [];
 
 		if (isset($query['monokulo_connected'])) {

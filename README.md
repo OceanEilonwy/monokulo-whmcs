@@ -49,6 +49,23 @@ A Monokulo store is one web address: WHMCS connects by its System URL's
 host. If you change the System URL, connect again. **Connect again**
 replaces the keys (Monokulo replaces its webhook too).
 
+### What connecting keeps
+
+Connecting hands WHMCS the store's keys and the entry of Monokulo's
+[HTTP API](https://docs.monokulo.com/api/) (`/api/v1` on your Monokulo's
+address). WHMCS's server calls Monokulo with the store's secret key
+(`Authorization: Bearer sk_…`), which picks the store: it reads the entry,
+creates each order with the entry's `create-order` form, and sends the
+client to the order's checkout link (`/checkout/<order id>`). When
+**Send errors to Monokulo** is on, warnings and errors go to the entry's
+`logs`. Monokulo's refusals (`application/problem+json`) are in the
+Activity Log with their reason and a link to the problem's page.
+
+**Upgrading** from a version that connected before the API's entry was
+handed over: nothing to do. The gateway keeps the store's keys and uses
+`/api/v1` on the saved **Monokulo address**, so keep that address as it
+was when you connected (or connect again).
+
 ## What the client sees
 
 On an unpaid invoice whose payment method is *Monokulo (Monero)*, a **Pay
@@ -162,7 +179,10 @@ scripts/test down
   zip installs: webhooks, the settings page, connecting, paying.
 - **smoke**: a fresh Monokulo (`docker/monokulo-smoke.toml`): sign up, add
   a watch-only wallet, connect, then a client's Pay with Monero lands on
-  the Monokulo checkout, whose status is pending. Nothing is paid.
+  the Monokulo checkout, and the order, read through the API, is pending.
+  Nothing is paid. It also checks the stand-in Monokulo's API answers
+  (`tests/Support/Api.php`) against the real one's OpenAPI document
+  (`/api/v1/openapi.json`).
 
 Webhook tests use Monokulo's published test vectors, vendored in
 `tests/vectors` and pinned to a monokulo commit (`tests/vectors/PIN`).
