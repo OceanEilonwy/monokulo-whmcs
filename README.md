@@ -87,7 +87,9 @@ it sends them to the order's checkout on your Monokulo's onion address,
 never to its web address. Your Monokulo needs an onion address for that
 (Tor inside it, or an external tor): the gateway's settings say whether it
 has one. Without one, a client on Tor is told Monero payments can't be
-made over Tor here yet, and the Activity Log says why; clients on your web
+made over Tor here yet (no Monokulo order is made: the API's entry,
+asked again first, says whether there is an onion address), and the
+Activity Log says why; clients on your web
 address pay as usual.
 
 WHMCS's own server always reaches Monokulo at its web address; only the

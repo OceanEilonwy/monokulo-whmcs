@@ -68,6 +68,24 @@ final class Client {
 	}
 
 	/**
+	 * Where the API's entry is on Monokulo's onion address (the entry's
+	 * `mk:onion-api`, from the kept copy while it holds), or null when
+	 * Monokulo has no onion address: then no order has an onion checkout.
+	 *
+	 * @throws ApiError|TransportError
+	 */
+	public function onionApi(Connection $connection): ?string {
+		$entry = $this->entry($connection, 30, false);
+		if ($entry->link('mk:onion-api') === null && !$entry->fresh) {
+			// Before refusing anyone over it, make sure: a Monokulo that has
+			// just gained an onion address says so now (304 while it hasn't).
+			$entry = $this->entry($connection, 30, false, true);
+		}
+
+		return $entry->link('mk:onion-api');
+	}
+
+	/**
 	 * Creates an order with the entry's `create-order` form, and returns it
 	 * with its links.
 	 *
@@ -143,14 +161,14 @@ final class Client {
 
 	/**
 	 * The API's entry for this connection's key: the kept copy while it
-	 * holds, else read (with `If-None-Match` when there is a copy, unless
-	 * `again`, which reads it whole) and kept.
+	 * holds (unless `revalidate`), else read (with `If-None-Match` when there
+	 * is a copy, unless `again`, which reads it whole) and kept.
 	 *
 	 * @throws ApiError|TransportError
 	 */
-	private function entry(Connection $connection, int $timeoutSeconds, bool $again): Entry {
+	private function entry(Connection $connection, int $timeoutSeconds, bool $again, bool $revalidate = false): Entry {
 		$kept = $again ? null : $this->cache->entry($connection);
-		if ($kept && $kept->expiresAt > $this->now) {
+		if ($kept && $kept->expiresAt > $this->now && !$revalidate) {
 			return $kept;
 		}
 		$headers = $this->headers(null, $connection);

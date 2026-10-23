@@ -138,7 +138,9 @@ final class GatewayTest extends WhmcsTestCase {
 	}
 
 	public function test_an_unknown_connect_error_says_nothing(): void {
-		$this->assertSame($this->notes(), $this->notes(['monokulo_connect_error' => '<script>']));
+		// The Connect link is signed with the time: a second may pass between the two.
+		$unsigned = static fn(string $notes): string => (string)preg_replace('/&amp;t=\d+&amp;sig=[0-9a-f]+/', '', $notes);
+		$this->assertSame($unsigned($this->notes()), $unsigned($this->notes(['monokulo_connect_error' => '<script>'])));
 	}
 
 	public static function addresses(): array {

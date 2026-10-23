@@ -314,6 +314,7 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertSame(Api::ONION . '/checkout/order_1', $response->headers['Location']);
 		$this->assertStringContainsString('Client sent to pay with Monero: ' . Api::ONION . '/checkout/order_1', Whmcs::gatewayLog()[0]['data']);
 		$this->assertStringContainsString('over Tor', Whmcs::logs());
+		$this->assertSame(['GET /api/v1', 'POST /api/v1/orders'], array_map(static fn(array $r): string => $r['method'] . ' ' . $r['path'], self::$monokulo->requests()), 'the entry read once, for both');
 	}
 
 	/** A client on the shop's web address goes to the web checkout, even when there's an onion one. */
@@ -339,6 +340,51 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertStringNotContainsString(self::$monokulo->url, $response->body);
 		$this->assertStringContainsString('your Monokulo has no onion address', Whmcs::logs());
 		$this->assertSame([], Whmcs::gatewayLog(), 'not sent to pay');
+		$this->assertSame(['GET /api/v1'], array_map(static fn(array $r): string => $r['method'] . ' ' . $r['path'], self::$monokulo->requests()), 'the entry said so: no order was made');
+		$this->assertSame([], Whmcs::rows('mod_monokulo_order'));
+	}
+
+	/** A kept entry without an onion address is revalidated before a Tor client is refused: unchanged (304), refused, no order. */
+	public function test_a_second_tor_client_is_refused_after_revalidating(): void {
+		$this->monokuloCreates();
+		$this->call(new \Monokulo\Whmcs\Request('GET', $this->payLink(Whmcs::invoice()), origin: self::ONION_SHOP));
+		self::$monokulo->reset();
+		$this->monokuloCreates();
+
+		$response = $this->call(new \Monokulo\Whmcs\Request('GET', $this->payLink(Whmcs::invoice()), origin: self::ONION_SHOP));
+
+		$this->assertSame(503, $response->status);
+		$this->assertSame(['GET /api/v1'], array_map(static fn(array $r): string => $r['method'] . ' ' . $r['path'], self::$monokulo->requests()));
+		$this->assertSame(Api::ETAG, self::$monokulo->requests()[0]['headers']['if-none-match']);
+		$this->assertSame([], $this->creates());
+	}
+
+	/** Monokulo has just gained an onion address: the kept entry without it is revalidated, and the Tor client pays over Tor. */
+	public function test_a_monokulo_that_just_gained_an_onion_address_takes_tor_clients_at_once(): void {
+		$this->monokuloCreates();
+		$this->get($this->payLink(Whmcs::invoice()));
+		self::$monokulo->reset();
+		self::$monokulo->respond('GET', '/api/v1', 200, Api::entry(onion: true), headers: ['ETag' => '"onion"'] + Api::entryHeaders());
+		self::$monokulo->respond('POST', '/api/v1/orders', 201, Api::order('order_2', onion: true));
+
+		$response = $this->call(new \Monokulo\Whmcs\Request('GET', $this->payLink(Whmcs::invoice()), origin: self::ONION_SHOP));
+
+		$this->assertSame(Api::ONION . '/checkout/order_2', $response->headers['Location']);
+		$this->assertSame(Api::ETAG, self::$monokulo->requests()[0]['headers']['if-none-match']);
+		$row = Whmcs::rows('mod_monokulo_connection')[0];
+		$this->assertSame(['"onion"', Api::ONION . '/api/v1'], [$row['entry_etag'], $row['onion_api']]);
+	}
+
+	/** The entry has an onion address but the order no onion checkout: still never sent to the web. */
+	public function test_an_order_without_an_onion_checkout_is_not_paid_on_the_web(): void {
+		$this->monokuloCreates();
+		self::$monokulo->respond('GET', '/api/v1', 200, Api::entry(onion: true), headers: Api::entryHeaders());
+
+		$response = $this->call(new \Monokulo\Whmcs\Request('GET', $this->payLink(Whmcs::invoice()), origin: self::ONION_SHOP));
+
+		$this->assertSame(503, $response->status);
+		$this->assertArrayNotHasKey('Location', $response->headers);
+		$this->assertCount(1, $this->creates());
 	}
 
 	/** With "Send errors to Monokulo" on, the merchant's warning goes to Monokulo too, with its trace. */
