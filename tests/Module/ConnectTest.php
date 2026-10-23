@@ -112,7 +112,7 @@ final class ConnectTest extends WhmcsTestCase {
 		$this->assertSame('whmcs/' . Plugin::VERSION, $request['headers']['monokulo-client']);
 
 		$connection = $this->repository()->connection(Whmcs::HOST);
-		$this->assertSame(['https://pay.example.com', 'pk_new', 'sk_new', 'whsec_new', Plugin::CONNECTION_VERSION], [$connection->endpoint, $connection->publicKey, $connection->secretToken, $connection->webhookSecret, $connection->version]);
+		$this->assertSame(['https://pay.example.com', 'pk_new', 'sk_new', 'whsec_new'], [$connection->endpoint, $connection->publicKey, $connection->secretToken, $connection->webhookSecret]);
 		$this->assertStringContainsString('localhost:8091 connected to Monokulo as pk_new', Whmcs::logs());
 	}
 

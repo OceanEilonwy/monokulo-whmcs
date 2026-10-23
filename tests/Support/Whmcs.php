@@ -56,7 +56,7 @@ final class Whmcs {
 	}
 
 	/** Connected as the connect flow leaves it (the gateway makes its tables first). */
-	public static function connect(string $endpoint, string $webhookSecret, string $version = Plugin::CONNECTION_VERSION, string $host = self::HOST): void {
+	public static function connect(string $endpoint, string $webhookSecret, string $host = self::HOST): void {
 		(new \Monokulo\Whmcs\Repository(Capsule::connection()))->install();
 		Capsule::table('mod_monokulo_connection')->insert([
 			'host'               => $host,
@@ -64,7 +64,6 @@ final class Whmcs {
 			'public_key'         => 'pk_test',
 			'secret_token'       => 'sk_test',
 			'webhook_secret'     => $webhookSecret,
-			'connection_version' => $version,
 			'connected_at'       => 1760000000,
 		]);
 	}

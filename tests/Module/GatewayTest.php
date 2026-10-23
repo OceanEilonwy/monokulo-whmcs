@@ -2,7 +2,6 @@
 namespace Monokulo\Whmcs\Tests\Module;
 
 use Monokulo\Whmcs\Links;
-use Monokulo\Whmcs\Plugin;
 use Monokulo\Whmcs\Repository;
 use Monokulo\Whmcs\Tests\Support\Calls;
 use Monokulo\Whmcs\Tests\Support\Whmcs;
@@ -105,12 +104,6 @@ final class GatewayTest extends WhmcsTestCase {
 		Whmcs::connect('https://pay.example.com', 'whsec', host: 'old.example');
 
 		$this->assertStringContainsString('Not connected', $this->notes());
-	}
-
-	public function test_an_older_connection_must_be_made_again(): void {
-		Whmcs::connect('https://pay.example.com', 'whsec', '0');
-
-		$this->assertStringContainsString('connected by an older version of this gateway', $this->notes());
 	}
 
 	public static function connectResults(): array {
