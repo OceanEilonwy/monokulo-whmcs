@@ -101,6 +101,13 @@ final class Repository implements EntryCache {
 				}
 			}
 		}
+		// Kept by builds before 0.2.0 was released, now taken from each
+		// webhook's mk:dashboard-order instead: dropped where it is left.
+		if ($schema->hasColumn('mod_monokulo_order', 'dashboard_url')) {
+			$schema->table('mod_monokulo_order', static function (Blueprint $t): void {
+				$t->dropColumn('dashboard_url');
+			});
+		}
 	}
 
 	/** The host's connection, or null before it has connected. */

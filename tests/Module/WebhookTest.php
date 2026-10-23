@@ -96,6 +96,28 @@ final class WebhookTest extends WhmcsTestCase {
 		}
 	}
 
+	/**
+	 * A build from before 0.2.0 was released kept each order's dashboard
+	 * link: installing drops the column, keeps the orders, and their
+	 * webhooks still apply, linking the order from the webhook.
+	 */
+	public function test_installing_drops_the_kept_dashboard_link_column(): void {
+		Capsule::schema()->table('mod_monokulo_order', static function (\Illuminate\Database\Schema\Blueprint $t): void {
+			$t->string('dashboard_url', 512)->nullable();
+		});
+		Capsule::table('mod_monokulo_order')->update(['dashboard_url' => 'https://pay.example.com/stores/st_1/orders/' . Vectors::orderId()]);
+
+		$this->repository()->install();
+		$this->repository()->install();
+
+		$this->assertFalse(Capsule::schema()->hasColumn('mod_monokulo_order', 'dashboard_url'));
+		$this->assertSame([Vectors::orderId()], array_column(Whmcs::rows('mod_monokulo_order'), 'monokulo_order_id'));
+		$this->assertSame(200, $this->deliverVector('order.paid'));
+		$this->assertSame('Paid', Whmcs::invoiceStatus($this->invoice));
+		$link = json_decode(Vectors::delivery('order.paid')['body'], true)['_links']['mk:dashboard-order']['href'];
+		$this->assertStringContainsString('in_monokulo => ' . $link, $this->lastLog()['data']);
+	}
+
 	/** A body without `_links` (or with a link that isn't a web address): the log has no link rather than a built one. */
 	public function test_a_webhook_without_a_dashboard_link_logs_none(): void {
 		$data = json_decode(Vectors::delivery('order.paid')['body'], true);
