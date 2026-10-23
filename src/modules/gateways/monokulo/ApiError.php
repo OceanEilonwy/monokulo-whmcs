@@ -9,38 +9,62 @@ namespace Monokulo\Whmcs;
  * what went wrong (a problem's `detail`, or the raw body), and `problem` the
  * problem's name when the answer was `application/problem+json`: the last
  * part of its `type` (`https://docs.monokulo.com/problems/invalid-amount` is
- * `invalid-amount`), whose page says what it means.
+ * `invalid-amount`), whose page says what it means. `retryAfter` is how
+ * many seconds to wait before trying again, when Monokulo said (the
+ * problem's `retry_after`, or `Retry-After`).
  */
 final class ApiError extends \RuntimeException {
+	/**
+	 * Nothing was made, and the same request may work shortly: no exchange
+	 * rate for the currency right now, or the payment engine is busy.
+	 */
+	private const TRY_AGAIN = ['rates-unavailable', 'engine-unavailable'];
+
 	public function __construct(
 		public readonly int $status,
 		public readonly string $detail,
 		public readonly string $problem = '',
 		public readonly string $type = '',
+		public readonly ?int $retryAfter = null,
 	) {
 		parent::__construct(sprintf('HTTP %d%s: %s', $status, $problem !== '' ? ' ' . $problem : '', $detail));
 	}
 
 	/**
 	 * The error a failed answer carries: a problem+json body's `detail` (or
-	 * its `title`) and `type`, else the body.
+	 * its `title`), `type` and `retry_after` (else the `Retry-After` header,
+	 * in seconds), else the body.
 	 */
-	public static function from(int $status, string $body): self {
+	public static function from(int $status, string $body, string $retryAfterHeader = ''): self {
+		$retryAfter = preg_match('/\A\d{1,9}\z/', trim($retryAfterHeader)) ? (int)trim($retryAfterHeader) : null;
 		$data = json_decode($body, true);
 		if (is_array($data) && isset($data['type']) && is_string($data['type'])) {
 			$detail = is_string($data['detail'] ?? null) && $data['detail'] !== '' ? $data['detail'] : (is_string($data['title'] ?? null) ? $data['title'] : $body);
 			$slug = basename((string)parse_url($data['type'], PHP_URL_PATH));
+			if (is_int($data['retry_after'] ?? null) && $data['retry_after'] >= 0) {
+				$retryAfter = $data['retry_after'];
+			}
 
-			return new self($status, $detail, $slug, $data['type']);
+			return new self($status, $detail, $slug, $data['type'], $retryAfter);
 		}
 
-		return new self($status, $body);
+		return new self($status, $body, retryAfter: $retryAfter);
+	}
+
+	/**
+	 * Whether the same request is worth sending again shortly: nothing was
+	 * made, and the client pressing Pay with Monero again sends it with the
+	 * same idempotency key.
+	 */
+	public function tryAgain(): bool {
+		return in_array($this->problem, self::TRY_AGAIN, true);
 	}
 
 	/** The language key of what the customer is told. */
 	public function customerMessageKey(): string {
 		return match (true) {
 			$this->problem === 'invalid-amount'             => 'error_currency',
+			$this->problem === 'rates-unavailable'          => 'error_rates',
 			$this->status === 429                           => 'error_busy',
 			$this->status === 503                           => 'error_busy',
 			$this->status === 401 || $this->status === 403  => 'error_unavailable',
@@ -51,18 +75,24 @@ final class ApiError extends \RuntimeException {
 	/** A pointer for the merchant reading the log, or ''. */
 	public function merchantHint(): string {
 		$hint = match (true) {
-			$this->status === 401                     => 'the store secret key was rejected: connect again from the Monokulo gateway settings',
-			$this->problem === 'invalid-amount'       => 'check that your Monokulo can price the invoice\'s currency',
-			$this->problem === 'idempotency-conflict' => 'Monokulo already has an order under this invoice\'s payment key for a different amount',
-			$this->status === 403                     => 'Monokulo refused the store secret key for this: connect again from the Monokulo gateway settings',
-			$this->status === 429                     => 'rate limited: Monokulo is receiving too many requests from this WHMCS',
-			$this->status === 503                     => 'Monokulo\'s payment engine is busy or unavailable: try again shortly',
-			default                                   => '',
+			$this->status === 401                      => 'the store secret key was rejected: connect again from the Monokulo gateway settings',
+			$this->problem === 'invalid-amount'        => 'check that your Monokulo can price the invoice\'s currency',
+			$this->problem === 'idempotency-conflict'  => 'Monokulo already has an order under this invoice\'s payment key for a different amount',
+			$this->problem === 'rates-unavailable'     => 'Monokulo has no exchange rate for the invoice\'s currency right now (its rate providers are down or rate limiting it); no order was made, and the client was asked to try again shortly' . $this->wait(),
+			$this->problem === 'engine-unavailable'    => 'Monokulo\'s payment engine is busy; no order was made, and the client was asked to try again shortly' . $this->wait(),
+			$this->status === 403                      => 'Monokulo refused the store secret key for this: connect again from the Monokulo gateway settings',
+			$this->status === 429                      => 'rate limited: Monokulo is receiving too many requests from this WHMCS',
+			$this->status === 503                      => 'Monokulo is unavailable: try again shortly',
+			default                                    => '',
 		};
 		if ($hint === '' && $this->type === '') {
 			return '';
 		}
 
 		return ' (' . $hint . ($hint !== '' && $this->type !== '' ? '; ' : '') . $this->type . ')';
+	}
+
+	private function wait(): string {
+		return $this->retryAfter !== null ? sprintf(' (Monokulo suggests waiting %d seconds)', $this->retryAfter) : '';
 	}
 }

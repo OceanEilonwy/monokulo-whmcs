@@ -25,6 +25,31 @@ final class WebhookEventTest extends TestCase {
 		$this->assertNull(WebhookEvent::parse(Vectors::delivery('order.paid')['body'])->txid);
 	}
 
+	/** Every delivery links the order's page on the merchant's dashboard, absolute. */
+	public function test_every_published_delivery_links_the_order_in_monokulo(): void {
+		foreach (Vectors::deliveries() as $name => $delivery) {
+			$href = json_decode($delivery['body'], true)['_links']['mk:dashboard-order']['href'];
+			$this->assertStringStartsWith('https://', $href, $name);
+			$this->assertSame($href, WebhookEvent::parse($delivery['body'])->dashboardUrl, $name);
+		}
+	}
+
+	public static function notDashboardLinks(): array {
+		return [
+			'no links'      => ['{"event":"order.paid","event_id":"e","order_id":"o"}'],
+			'no such link'  => ['{"event":"order.paid","event_id":"e","order_id":"o","_links":{"mk:checkout":{"href":"https://x/checkout/o"}}}'],
+			'relative'      => ['{"event":"order.paid","event_id":"e","order_id":"o","_links":{"mk:dashboard-order":{"href":"/stores/s/orders/o"}}}'],
+			'not the web'   => ['{"event":"order.paid","event_id":"e","order_id":"o","_links":{"mk:dashboard-order":{"href":"javascript:alert(1)"}}}'],
+			'not a string'  => ['{"event":"order.paid","event_id":"e","order_id":"o","_links":{"mk:dashboard-order":{"href":5}}}'],
+			'links a list'  => ['{"event":"order.paid","event_id":"e","order_id":"o","_links":[1]}'],
+		];
+	}
+
+	#[DataProvider('notDashboardLinks')]
+	public function test_anything_but_an_absolute_web_link_is_no_link(string $body): void {
+		$this->assertNull(WebhookEvent::parse($body)->dashboardUrl);
+	}
+
 	public static function notEnvelopes(): array {
 		return [
 			'not JSON'          => ['nope'],

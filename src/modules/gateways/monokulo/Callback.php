@@ -107,6 +107,11 @@ final class Callback {
 			$order = $this->client()->createOrder($connection, $body);
 		} catch (ApiError $e) {
 			$this->log->error(sprintf('Creating the Monokulo order for invoice %d failed: HTTP %d: %s%s', $invoiceId, $e->status, $e->detail, $e->merchantHint()));
+			if ($e->tryAgain()) {
+				// Nothing was made: pressing Pay with Monero again sends the
+				// same request, with the same idempotency key.
+				return Response::page(503, $e->customerMessageKey(), $back, $e->retryAfter);
+			}
 
 			return Response::page(502, $e->customerMessageKey(), $back);
 		} catch (TransportError $e) {
@@ -198,9 +203,9 @@ final class Callback {
 			$this->log->error(sprintf('Connect finish at %s failed: HTTP %d%s: %s', $address, $e->status, $e->problem !== '' ? ' ' . $e->problem : '', $e->detail));
 
 			return 'monokulo_connect_error=' . match ($e->problem) {
-				'no-public-address'                    => 'unavailable',
-				'rate-limited', 'challenge-required'   => 'busy',
-				default                                => 'finish',
+				'no-public-address' => 'unavailable',
+				'rate-limited'      => 'busy',
+				default             => 'finish',
 			};
 		} catch (TransportError $e) {
 			$this->log->error(sprintf('Connect finish at %s failed: could not reach it: %s', $address, $e->getMessage()));

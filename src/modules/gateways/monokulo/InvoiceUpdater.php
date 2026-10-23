@@ -6,10 +6,12 @@ namespace Monokulo\Whmcs;
 /**
  * Applies one webhook decision to a WHMCS invoice: a payment added (WHMCS
  * then does what it does when an invoice is paid: the confirmation email,
- * provisioning) and an entry in the gateway log either way.
+ * provisioning) and an entry in the gateway log either way, linking the
+ * order's page on the merchant's dashboard as the webhook does.
  *
  * An invoice can have several Monokulo orders (its balance changed, or an
- * earlier one expired), and Monokulo keeps watching all of them:
+ * earlier one expired or was cancelled), and Monokulo keeps watching all of
+ * them:
  *
  * - Paid (or overpaid), from any of them: the money arrived, so the payment
  *   is added, unless this order's payment is already on the invoice or the
@@ -26,7 +28,7 @@ final class InvoiceUpdater {
 	}
 
 	/**
-	 * @param array{invoice_id: int, amount: string, currency: string, latest: bool, dashboard_url: ?string} $order the Monokulo order, as Repository::findOrder has it
+	 * @param array{invoice_id: int, amount: string, currency: string, latest: bool} $order the Monokulo order, as Repository::findOrder has it
 	 */
 	public function apply(array $order, Decision $decision, WebhookEvent $event): void {
 		$invoiceId = $order['invoice_id'];
@@ -73,8 +75,8 @@ final class InvoiceUpdater {
 		if ($event->txid) {
 			$data['txid'] = $event->txid;
 		}
-		if ($order['dashboard_url'] !== null) {
-			$data['in_monokulo'] = $order['dashboard_url'];
+		if ($event->dashboardUrl !== null) {
+			$data['in_monokulo'] = $event->dashboardUrl;
 		}
 		$this->whmcs->gatewayLog($data, $result);
 	}

@@ -104,6 +104,12 @@ amount in XMR, the address, a QR code, and the payment's progress. Pressing
 it again returns to the same Monokulo order while the balance is the same
 and the order hasn't expired.
 
+When Monokulo has no exchange rate for the invoice's currency right now
+(its rate providers are down) or its payment engine is busy, no order is
+made: the client is asked to try again in a few minutes, and the gateway's
+log says why. Pressing Pay with Monero again sends the same request, so it
+can never make a second order.
+
 WHMCS asks Monokulo for the balance in the client's currency; Monokulo
 converts it to XMR at its own exchange rate. The currency must be one your
 Monokulo prices (or XMR itself). WHMCS's *Convert To For Processing*
@@ -125,14 +131,19 @@ account).
 | (Pay with Monero pressed) | The client was sent to pay | Unpaid | Sent to pay, with the payment link |
 | `order.unconfirmed`, `order.confirming` | A payment was seen; waiting for confirmations | Unpaid | Payment seen |
 | `order.partial` | Less than the amount due arrived (underpaid) | Unpaid | Part paid |
-| `order.paid` | Paid in full | Payment added (the Monokulo order id is its transaction id): **Paid** | Paid, with a link to the order in Monokulo (its `mk:dashboard-order`) |
+| `order.paid` | Paid in full | Payment added (the Monokulo order id is its transaction id): **Paid** | Paid |
 | `order.overpaid` | Paid with more than was due | As paid: the amount due is added | Overpaid: the excess isn't refunded automatically |
 | `order.expired` | The payment window closed without full payment | Unpaid; Pay with Monero starts a new Monokulo order | Expired: any funds received stay at the address |
+| `order.cancelled` | Cancelled before it was paid (only Monokulo's POS cancels, and only its own orders, so an invoice's order isn't expected to be) | As expired | Cancelled: as expired |
 | `order.double_spend_detected` | A payment was double-spent and no longer counts | unchanged | Double spend: fraud alert (the status change, if any, comes as its own event) |
 | `order.double_spend_reversed` | That alert was wrong | unchanged | Double spend withdrawn |
 
+Each entry links the order in Monokulo (`in_monokulo`): the webhook's
+`mk:dashboard-order` link.
+
 An invoice can have more than one Monokulo order: Pay with Monero starts a
-new one when the balance changed or the earlier one expired. The gateway
+new one when the balance changed or the earlier one expired or was
+cancelled. The gateway
 remembers each, and Monokulo keeps watching them all:
 
 - A payment from **any** of them is added, under that order's id: the
@@ -222,7 +233,7 @@ scripts/test down
   onion address and a stand-in for its exchange rates): sign up, add a
   watch-only wallet, connect, then a client's Pay with Monero lands on the
   Monokulo checkout, a client on the shop's onion address on the onion
-  checkout, the order's dashboard page opens, and the kept entry is used
+  checkout, and the kept entry is used
   and then revalidated. Nothing is paid. `scripts/smoke` runs it twice:
   with Monokulo on its own address, then served under a path through a
   prefix-stripping proxy (`tests/Support/prefix-proxy.php`). It also

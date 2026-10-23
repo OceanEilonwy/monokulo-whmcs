@@ -186,7 +186,6 @@ final class PayTest extends WhmcsTestCase {
 			'rate limited'     => [Api::problem('rate-limited', 429, 'Too many requests', 'Wait 5 seconds.'), 'Monero payments are busy right now', 'rate limited'],
 			'key refused'      => [Api::problem('unauthorized', 401, 'No valid key', 'This key was not accepted.'), 'Monero payments are not available right now', 'connect again from the Monokulo gateway settings'],
 			'unknown currency' => [Api::problem('invalid-amount', 400, 'The order can\'t be priced', 'unknown currency: ABC'), 'currency can&#039;t be paid in Monero', 'unknown currency: ABC'],
-			'engine down'      => [Api::problem('engine-unavailable', 503, 'Payment engine unavailable', 'busy'), 'Monero payments are busy right now', 'https://docs.monokulo.com/problems/engine-unavailable'],
 		];
 	}
 
@@ -206,6 +205,50 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertSame([], Whmcs::rows('mod_monokulo_order'));
 	}
 
+	public static function tryAgainShortly(): array {
+		return [
+			'no exchange rate' => [Api::problem('rates-unavailable', 503, 'No exchange rate', 'No exchange rate for EUR right now.') + ['retry_after' => 60], ['Retry-After' => '60'], 'Monero prices are not available right now', 'no exchange rate for the invoice\'s currency right now', '60'],
+			'engine busy'      => [Api::problem('engine-unavailable', 503, 'Payment engine unavailable', 'The payment engine is busy.'), [], 'Monero payments are busy right now', 'payment engine is busy', null],
+		];
+	}
+
+	/**
+	 * No exchange rate right now, or the engine busy: no order was made. The
+	 * client is asked to try again shortly (with Monokulo's Retry-After),
+	 * the merchant told why, and pressing Pay with Monero again sends the
+	 * same request with the same idempotency key, which then makes the order.
+	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('tryAgainShortly')]
+	public function test_a_try_again_problem_asks_the_client_to_try_again_with_the_same_key(array $problem, array $headers, string $client, string $hint, ?string $retryAfter): void {
+		$invoice = Whmcs::invoice();
+		$this->monokuloCreates();
+		self::$monokulo->respond('POST', '/api/v1/orders', 503, $problem, headers: ['Content-Type' => Api::PROBLEM] + $headers);
+
+		$response = $this->get($this->payLink($invoice));
+
+		$this->assertSame(503, $response->status);
+		$this->assertSame($retryAfter, $response->headers['Retry-After'] ?? null);
+		$this->assertStringContainsString($client, $response->body);
+		$this->assertStringContainsString('try again', $response->body);
+		$this->assertStringContainsString('Back to the invoice', $response->body);
+		$this->assertStringContainsString('Creating the Monokulo order for invoice ' . $invoice . ' failed: HTTP 503: ' . $problem['detail'], Whmcs::logs());
+		$this->assertStringContainsString($hint, Whmcs::logs());
+		$this->assertStringContainsString('no order was made', Whmcs::logs());
+		$this->assertStringContainsString($problem['type'], Whmcs::logs());
+		if ($retryAfter !== null) {
+			$this->assertStringContainsString('waiting ' . $retryAfter . ' seconds', Whmcs::logs());
+		}
+		$this->assertSame([], Whmcs::rows('mod_monokulo_order'));
+
+		// Pressed again, once Monokulo can: the same request, and the order.
+		$this->monokuloCreates();
+		$again = $this->get($this->payLink($invoice));
+
+		$this->assertSame(self::$monokulo->url . '/checkout/order_1', $again->headers['Location']);
+		$this->assertSame($this->sent(0), $this->sent(1));
+		$this->assertCount(1, Whmcs::rows('mod_monokulo_order'));
+	}
+
 	public function test_an_unreachable_monokulo_is_reported(): void {
 		Capsule::table('mod_monokulo_connection')->update(['api' => 'http://127.0.0.1:' . FakeMonokulo::freePort() . '/api/v1']);
 		$invoice = Whmcs::invoice();
@@ -217,7 +260,7 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertStringContainsString('could not reach', Whmcs::logs());
 	}
 
-	/** As a shop connected on 0.1.0 has it: no kept entry, no onion entry, no orders' dashboard links. */
+	/** As a shop connected on 0.1.0 has it: no kept entry, no onion entry. */
 	private static function connectedOnTheLastVersion(): void {
 		$schema = Capsule::schema();
 		$schema->drop('mod_monokulo_connection');
@@ -228,9 +271,6 @@ final class PayTest extends WhmcsTestCase {
 			$t->string('secret_token', 255);
 			$t->string('webhook_secret', 255);
 			$t->integer('connected_at');
-		});
-		$schema->table('mod_monokulo_order', static function (\Illuminate\Database\Schema\Blueprint $t): void {
-			$t->dropColumn('dashboard_url');
 		});
 		Capsule::table('mod_monokulo_connection')->insert([
 			'host'           => Whmcs::HOST,
@@ -258,10 +298,9 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertSame('Bearer sk_test', $this->creates()[0]['headers']['authorization']);
 		$row = Whmcs::rows('mod_monokulo_connection')[0];
 		$this->assertSame([Api::ONION . '/api/v1', Api::ETAG], [$row['onion_api'], $row['entry_etag']]);
-		$this->assertSame(self::$monokulo->url . '/stores/9f1c/orders/order_1', Whmcs::rows('mod_monokulo_order')[0]['dashboard_url']);
 	}
 
-	/** The entry is kept: the next client's order is one request, and the order's dashboard link is kept with it. */
+	/** The entry is kept: the next client's order is one request. */
 	public function test_the_entry_is_kept_between_clients(): void {
 		$this->monokuloCreates('order_1');
 		$this->get($this->payLink(Whmcs::invoice()));
@@ -270,7 +309,6 @@ final class PayTest extends WhmcsTestCase {
 		$this->get($this->payLink(Whmcs::invoice()));
 
 		$this->assertSame(['/api/v1', '/api/v1/orders', '/api/v1/orders'], array_column(self::$monokulo->requests(), 'path'));
-		$this->assertSame([self::$monokulo->url . '/stores/9f1c/orders/order_1', self::$monokulo->url . '/stores/9f1c/orders/order_2'], array_column(Whmcs::rows('mod_monokulo_order'), 'dashboard_url'));
 	}
 
 	/** The key was replaced in Monokulo since the entry was kept: read again, and the new key's form followed. */
