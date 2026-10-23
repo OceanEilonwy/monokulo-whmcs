@@ -12,7 +12,7 @@ final class Text {
 		// Settings (Setup > Payments > Payment Gateways)
 		'display_name'              => 'Monokulo (Monero)',
 		'entry_address'             => 'Monokulo address',
-		'help_address'              => 'Where your Monokulo is, as your browser opens it: https://monokulo.com, or your own Monokulo\'s address. Save, then press Connect below.',
+		'help_address'              => 'Where your Monokulo is, as your browser opens it: https://www.monokulo.com, or your own Monokulo\'s address. Save, then press Connect below.',
 		'entry_forward_errors'      => 'Send errors to Monokulo',
 		'help_forward_errors'       => 'Also send this gateway\'s warnings and errors to your Monokulo, when the store there accepts client logs. They are always in WHMCS\'s Activity Log.',
 		'text_connected_as'         => 'Connected as %s since %s.',
@@ -22,7 +22,7 @@ final class Text {
 		'text_webhook'              => 'Monokulo sends payment updates to %s.',
 		'button_connect'            => 'Connect',
 		'button_reconnect'          => 'Connect again',
-		'error_address'             => 'Enter your Monokulo address as an http or https address, such as https://monokulo.com.',
+		'error_address'             => 'Enter your Monokulo address as an http or https address, such as https://www.monokulo.com.',
 		'error_connect_address'     => 'Save your Monokulo address before connecting.',
 		'error_connect_host'        => 'The connect flow came back to a different address than it started from (did the System URL change?). Please connect again.',
 		'error_connect_finish'      => 'Monokulo did not hand over the store\'s keys. Please connect again; the Activity Log says why.',

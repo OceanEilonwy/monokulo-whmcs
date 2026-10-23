@@ -1,7 +1,7 @@
 # Monokulo for WHMCS
 
 Take Monero for WHMCS invoices through your own
-[Monokulo](https://monokulo.com/), the self-hosted, non-custodial Monero
+[Monokulo](https://docs.monokulo.com/), the self-hosted, non-custodial Monero
 payment processor. Monokulo only ever holds a view key: it watches the
 chain for payments to your wallet and tells WHMCS when an invoice is paid.
 No spend key touches WHMCS or Monokulo.
@@ -9,7 +9,7 @@ No spend key touches WHMCS or Monokulo.
 - WHMCS **8.13** or **9.x**, on a PHP version your WHMCS supports, **8.1**
   or newer (WHMCS 8.13: 8.1 to 8.3; WHMCS 9: 8.2 and 8.3). Tested on PHP
   8.1, 8.2, 8.3 and 8.4.
-- A store on [monokulo.com](https://monokulo.com/), or on your own Monokulo
+- A store on [www.monokulo.com](https://www.monokulo.com/), or on your own Monokulo
   (its operator must have set its public address)
 - GPL-3.0-or-later
 
@@ -28,7 +28,7 @@ No spend key touches WHMCS or Monokulo.
 On the gateway's settings (Setup > Payments > Payment Gateways, *Manage
 Existing Gateways*):
 
-1. Check the **Monokulo address**: `https://monokulo.com` (the default),
+1. Check the **Monokulo address**: `https://www.monokulo.com` (the default),
    or your own Monokulo's address as your browser opens it. **Save
    Changes**.
 2. Press **Connect** under the settings.
