@@ -9,7 +9,8 @@ No spend key touches WHMCS or Monokulo.
 - WHMCS **8.13** or **9.x**, on a PHP version your WHMCS supports, **8.1**
   or newer (WHMCS 8.13: 8.1 to 8.3; WHMCS 9: 8.2 and 8.3). Tested on PHP
   8.1, 8.2, 8.3 and 8.4.
-- A Monokulo whose operator has set its public address
+- A store on [monokulo.com](https://monokulo.com/), or on your own Monokulo
+  (its operator must have set its public address)
 - GPL-3.0-or-later
 
 ## Install
@@ -27,8 +28,9 @@ No spend key touches WHMCS or Monokulo.
 On the gateway's settings (Setup > Payments > Payment Gateways, *Manage
 Existing Gateways*):
 
-1. Enter your **Monokulo address**, as your browser opens it
-   (`https://pay.example.com`), and **Save Changes**.
+1. Check the **Monokulo address**: `https://monokulo.com` (the default),
+   or your own Monokulo's address as your browser opens it. **Save
+   Changes**.
 2. Press **Connect** under the settings.
 3. Sign in to Monokulo (or sign up) in the page that opens. Monokulo finds
    your store by WHMCS's web address (its System URL):
