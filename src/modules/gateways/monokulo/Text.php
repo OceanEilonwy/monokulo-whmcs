@@ -60,7 +60,10 @@ final class Text {
 		'note_expired'              => 'The payment window closed without full payment. Any funds received stay at the payment address; refund them yourself if needed. Paying the invoice again starts a new Monokulo order.',
 		'note_double_spend_detected' => 'FRAUD ALERT. A payment to this invoice was double-spent and no longer counts (transaction %s). If this changed the order\'s status, that is a separate entry. Check this invoice before delivering anything.',
 		'note_double_spend_reversed' => 'The earlier double-spend alert for this invoice (transaction %s) was wrong and is withdrawn. If this changed the order\'s status, that is a separate entry.',
-		'note_superseded'           => 'An older payment request for this invoice was paid, after the amount due changed. Nothing was added to the invoice: check the amount received and add the payment yourself.',
+		'note_paid_older'           => 'This was an older payment request for this invoice (a newer one was started after it), paid all the same: check the amount against the invoice\'s balance.',
+		'note_older'                => 'This is about an older payment request for this invoice, not its current one: nothing on the invoice changed.',
+		'note_paid_again'           => 'Paid, but the invoice was already paid, so nothing was added. This is a second payment: refund it from your wallet if needed.',
+		'note_overpaid_after_paid'  => 'More than the amount due has now arrived for this Monokulo order. Its payment was already on the invoice, so nothing was added: refund the excess yourself if needed.',
 		'note_unknown_transaction'  => 'unknown',
 	];
 

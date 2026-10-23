@@ -15,12 +15,12 @@ final class OrderRequestTest extends TestCase {
 		$body = OrderRequest::body(self::invoice(), 0, 'Invoice #1042', ' + %d more');
 
 		$this->assertSame([
-			'amount'                 => '12.50',
+			'amount'                 => '12.5',
 			'currency'               => 'EUR',
 			'merchant_order_id'      => '1042',
 			'show_merchant_order_id' => true,
 			'description'            => 'Invoice #1042: Web hosting + 2 more',
-			'idempotency_key'        => 'whmcs:1042:12.50:EUR:0',
+			'idempotency_key'        => 'whmcs:1042:12.5:EUR:0',
 		], $body);
 	}
 
@@ -45,16 +45,27 @@ final class OrderRequestTest extends TestCase {
 
 	public static function amounts(): array {
 		return [
-			'two decimals'           => ['12.5', '12.50'],
-			'already two'            => ['12.35', '12.35'],
-			'whole'                  => ['1000', '1000.00'],
-			'no thousands separator' => ['1234567.00', '1234567.00'],
+			'trailing zero trimmed'  => ['12.50', 'EUR', '12.5'],
+			'two decimals kept'      => ['12.35', 'EUR', '12.35'],
+			'whole'                  => ['1000.00', 'USD', '1000'],
+			'no thousands separator' => ['1234567.10', 'GBP', '1234567.1'],
+			'yen has none'           => ['1500.00', 'JPY', '1500'],
+			'yen rounds'             => ['1500.50', 'jpy', '1501'],
+			'three-decimal dinar'    => ['12.50', 'KWD', '12.5'],
+			'XMR not padded to 12'   => ['0.25', 'XMR', '0.25'],
+			'a few more cents'       => ['0.10', 'USD', '0.1'],
 		];
 	}
 
+	/** In the currency's own decimals, trailing zeros trimmed, never padded: Monokulo refuses more decimals than a fiat currency has. */
 	#[DataProvider('amounts')]
-	public function test_amounts_are_plain_decimals(string $balance, string $expected): void {
-		$this->assertSame($expected, OrderRequest::amount($balance));
+	public function test_amounts_are_in_the_currencys_decimals(string $balance, string $currency, string $expected): void {
+		$this->assertSame($expected, OrderRequest::amount($balance, $currency));
+		$this->assertMatchesRegularExpression('/\A[0-9]+(\.[0-9]{1,' . max(1, OrderRequest::decimals($currency)) . '})?\z/', OrderRequest::amount($balance, $currency));
+	}
+
+	public function test_the_currencys_decimals(): void {
+		$this->assertSame([2, 0, 3, 12, 2], array_map(OrderRequest::decimals(...), ['EUR', 'JPY', 'KWD', 'xmr', 'ZZZ']));
 	}
 
 	public function test_one_item_has_no_more(): void {
