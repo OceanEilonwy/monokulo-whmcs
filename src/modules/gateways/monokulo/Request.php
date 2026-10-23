@@ -1,4 +1,6 @@
 <?php
+declare(strict_types=1);
+
 namespace Monokulo\Whmcs;
 
 /** What the callback reads from one request. */
