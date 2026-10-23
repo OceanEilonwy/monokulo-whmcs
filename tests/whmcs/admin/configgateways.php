@@ -1,7 +1,8 @@
 <?php
 /**
  * The stand-in's Setup > Payments > Payment Gateways page, for the Monokulo
- * gateway only: its fields from monokulo_config(), saved through
+ * gateway only: its fields from monokulo_config() (a field not saved yet
+ * shows its Default), saved through
  * monokulo_config_validate() into tblpaymentgateways, as WHMCS does.
  */
 require __DIR__ . '/../init.php';
@@ -43,7 +44,7 @@ foreach (monokulo_config() as $name => $field) {
 		$checked = ($saved[$name] ?? '') === 'on' ? ' checked' : '';
 		echo '<tr><td>' . $e($field['FriendlyName']) . '</td><td><input type="checkbox" name="' . $e($name) . '"' . $checked . '> ' . $field['Description'] . '</td></tr>';
 	} else {
-		echo '<tr><td>' . $e($field['FriendlyName']) . '</td><td><input type="text" name="' . $e($name) . '" value="' . $e((string)($saved[$name] ?? '')) . '"> ' . $field['Description'] . '</td></tr>';
+		echo '<tr><td>' . $e($field['FriendlyName']) . '</td><td><input type="text" name="' . $e($name) . '" value="' . $e((string)($saved[$name] ?? $field['Default'] ?? '')) . '"> ' . $field['Description'] . '</td></tr>';
 	}
 }
 echo '</table><button type="submit">Save Changes</button></form></body></html>';
