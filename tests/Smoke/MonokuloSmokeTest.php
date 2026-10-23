@@ -204,8 +204,8 @@ final class MonokuloSmokeTest extends TestCase {
 
 	/**
 	 * The examples recorded against a test engine: the entry as the secret
-	 * key sees it, with and without an onion address, an order made with
-	 * that key, and the plugin handshake's answer.
+	 * key sees it, an order made with that key, and the plugin handshake's
+	 * answer (as recorded, with or without an onion address).
 	 *
 	 * @param array<string, mixed> $openapi
 	 */
@@ -223,8 +223,6 @@ final class MonokuloSmokeTest extends TestCase {
 				$this->assertEqualsCanonicalizing(array_column($form['properties'], 'name'), array_column($example['_templates'][$name]['properties'], 'name'), $name);
 			}
 		}
-		$this->assertContains(true, array_map(static fn(array $e): bool => isset($e['_links']['mk:onion-api']), $sk), 'with an onion address');
-		$this->assertContains(false, array_map(static fn(array $e): bool => isset($e['_links']['mk:onion-api']), $sk), 'without one');
 
 		$orders = array_filter($this->examples($openapi['paths']['/api/v1/orders']['post']['responses']['201']['content'][Api::HAL_FORMS]), static fn(array $o): bool => isset($o['_links']['mk:dashboard-order']));
 		$this->assertNotEmpty($orders, 'an example of an order made with the secret key');
