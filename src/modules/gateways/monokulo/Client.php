@@ -116,19 +116,29 @@ final class Client {
 	/**
 	 * The shop's warnings and errors, for the merchant to read in Monokulo,
 	 * through the entry's `send-logs` form. Best effort: nothing is sent when
-	 * the key isn't offered the form, and a failure here is ignored.
+	 * the key isn't offered the form, and an unreachable Monokulo is ignored
+	 * (these are reports about other failures). Monokulo refusing them
+	 * (client logs off for the store, the key refused, rate limited) is
+	 * returned, for the merchant to read in WHMCS's own log.
 	 *
 	 * @param list<array{level: string, message: string, trace_id: string}> $entries
 	 */
-	public function forwardLogs(Connection $connection, array $entries): void {
+	public function forwardLogs(Connection $connection, array $entries): ?ApiError {
 		if (!$entries) {
-			return;
+			return null;
 		}
 		try {
-			$this->submit($connection, 'send-logs', ['entries' => $entries], 3);
-		} catch (ApiError|TransportError) {
+			[$response] = $this->submit($connection, 'send-logs', ['entries' => $entries], 3);
+			if ($response !== null && ($response->status < 200 || $response->status > 299)) {
+				return ApiError::from($response->status, $response->body, $response->headers['retry-after'] ?? '');
+			}
+		} catch (ApiError $e) {
+			return $e;
+		} catch (TransportError) {
 			// Nothing to do: these are reports about other failures.
 		}
+
+		return null;
 	}
 
 	/**

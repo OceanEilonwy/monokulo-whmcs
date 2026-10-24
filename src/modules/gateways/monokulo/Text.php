@@ -30,6 +30,7 @@ final class Text {
 		'error_connect_finish'      => 'Monokulo did not hand over the store\'s keys. Please connect again; the Activity Log says why.',
 		'error_connect_unavailable' => 'Your Monokulo cannot connect shops yet: its operator has not set its public address.',
 		'error_connect_busy'        => 'Your Monokulo is busy right now. Wait a minute, then connect again.',
+		'error_connect_callback'    => 'Monokulo refused this WHMCS\'s address for payment updates. Check that the System URL (Setup > General Settings) is an http or https address, then connect again.',
 		'error_connect_unreachable' => 'Your Monokulo could not be reached from this server. Check the address, then connect again.',
 		'error_connect_admin'       => 'Sign in to the WHMCS admin area, then press Connect again from the Monokulo gateway settings.',
 		'error_connect_link'        => 'This Connect link has expired. Open the Monokulo gateway settings again and press Connect.',

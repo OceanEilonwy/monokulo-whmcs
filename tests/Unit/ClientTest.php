@@ -294,7 +294,7 @@ final class ClientTest extends TestCase {
 
 	public static function failures(): array {
 		return [
-			'rate limited'     => [429, Api::ORDER_PROBLEMS['rate-limited'], 'Rate limit exceeded; retry in 93 s.', 'rate-limited', 'error_busy', 'rate limited'],
+			'rate limited'     => [429, Api::ORDER_PROBLEMS['rate-limited'], 'Rate limit exceeded; retry in 120 s.', 'rate-limited', 'error_busy', 'rate limited'],
 			'bad key'          => [401, Api::ORDER_PROBLEMS['unauthorized'], 'This key was not accepted. Check it, or connect the store or app again.', 'unauthorized', 'error_unavailable', 'connect again from the Monokulo gateway settings'],
 			'not allowed'      => [403, Api::ORDER_PROBLEMS['forbidden'], 'This store only accepts orders from its verified websites, or from its own server using the store\'s secret key.', 'forbidden', 'error_unavailable', 'refused the store secret key'],
 			'unknown currency' => [400, Api::ORDER_PROBLEMS['invalid-amount'], 'unknown currency: NOPE', 'invalid-amount', 'error_currency', 'can price the invoice\'s currency'],
@@ -375,16 +375,29 @@ final class ClientTest extends TestCase {
 		$this->assertSame(['GET /api/v1'], self::calls());
 	}
 
-	public function test_nothing_to_forward_sends_nothing_and_a_dead_or_refusing_monokulo_is_ignored(): void {
-		$this->client()->forwardLogs($this->connection(), []);
+	public function test_nothing_to_forward_sends_nothing_a_dead_monokulo_is_ignored_and_a_refusal_returned(): void {
+		$this->assertNull($this->client()->forwardLogs($this->connection(), []));
 		$this->assertSame([], self::$monokulo->requests());
 
 		$dead = new Connection('shop.example', 'http://127.0.0.1:' . FakeMonokulo::freePort() . '/api/v1', 'pk', 'sk', 'wh', 1);
-		$this->client()->forwardLogs($dead, [['level' => 'error', 'message' => 'm', 'trace_id' => 'x']]);
+		$this->assertNull($this->client()->forwardLogs($dead, [['level' => 'error', 'message' => 'm', 'trace_id' => 'x']]));
 
-		self::$monokulo->respond('GET', '/api/v1', 401, Api::ORDER_PROBLEMS['unauthorized']);
-		$this->client()->forwardLogs($this->connection(), [['level' => 'error', 'message' => 'm', 'trace_id' => 'x']]);
+		self::$monokulo->respond('GET', '/api/v1', 401, Api::ENTRY_PROBLEMS['unauthorized'], headers: ['Content-Type' => Api::PROBLEM]);
+		$refused = $this->client()->forwardLogs($this->connection(), [['level' => 'error', 'message' => 'm', 'trace_id' => 'x']]);
 		$this->assertSame(['GET /api/v1'], self::calls());
+		$this->assertSame([401, 'unauthorized'], [$refused?->status, $refused?->problem]);
+	}
+
+	/** Client logs off for the store: the refusal comes back, with its problem and what to change. */
+	public function test_logs_off_is_returned_with_what_to_change(): void {
+		Api::serve(self::$monokulo);
+		$problem = Api::LOGS_PROBLEMS['logs-off'];
+		self::$monokulo->respond('POST', '/api/v1/logs', 403, $problem, headers: ['Content-Type' => Api::PROBLEM]);
+
+		$refused = $this->client()->forwardLogs($this->connection(), [['level' => 'error', 'message' => 'm', 'trace_id' => 'x']]);
+
+		$this->assertSame([403, 'logs-off', $problem['detail']], [$refused?->status, $refused?->problem, $refused?->detail]);
+		$this->assertStringContainsString('turn them on in the store\'s settings on Monokulo', $refused->merchantHint());
 	}
 
 	public static function cacheControls(): array {
