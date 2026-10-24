@@ -364,6 +364,53 @@ final class ClientTest extends TestCase {
 		$this->assertSame(['entries' => $entries], json_decode($request['body'], true));
 	}
 
+	/** Test connection: the entry's send-test-webhook form, with `{}` and the secret key; the recorded answer back. */
+	public function test_a_test_webhook_is_sent_with_the_entry_form(): void {
+		Api::serve(self::$monokulo, prefix: '/monokulo');
+		self::$monokulo->respond('POST', '/monokulo/api/v1/webhook-tests', 200, Api::webhookTest(prefix: '/monokulo'), headers: ['Content-Type' => Api::HAL_FORMS]);
+
+		$answer = $this->client()->sendTestWebhook($this->connection('/monokulo'));
+
+		$this->assertSame([true, 200, 12, 'evt_0000000000000002'], [$answer['delivered'], $answer['status'], $answer['duration_ms'], $answer['event_id']]);
+		$this->assertSame(['GET /monokulo/api/v1', 'POST /monokulo/api/v1/webhook-tests'], self::calls());
+		$request = self::$monokulo->requests()[1];
+		$this->assertSame('{}', $request['body'], 'the plugin\'s own webhook: an empty object, not a list');
+		$this->assertSame('Bearer sk_test', $request['headers']['authorization']);
+		$this->assertSame('application/json', $request['headers']['content-type']);
+	}
+
+	public function test_a_test_webhook_monokulo_refuses_is_a_problem(): void {
+		Api::serve(self::$monokulo);
+		$problem = Api::WEBHOOK_TEST_PROBLEMS['rate-limited'];
+		self::$monokulo->respond('POST', '/api/v1/webhook-tests', 429, $problem, headers: ['Content-Type' => Api::PROBLEM, 'Retry-After' => '120']);
+
+		try {
+			$this->client()->sendTestWebhook($this->connection());
+			$this->fail('no ApiError');
+		} catch (ApiError $e) {
+			$this->assertSame([429, 'rate-limited', 120], [$e->status, $e->problem, $e->retryAfter]);
+		}
+	}
+
+	/** A Monokulo from before the form: nothing is sent. */
+	public function test_without_the_send_test_webhook_form_no_test_is_sent(): void {
+		$entry = Api::entry();
+		unset($entry['_templates']['send-test-webhook']);
+		self::$monokulo->respond('GET', '/api/v1', 200, $entry, headers: Api::entryHeaders());
+
+		$this->assertNull($this->client()->sendTestWebhook($this->connection()));
+		$this->assertSame(['GET /api/v1'], self::calls());
+	}
+
+	/** A 200 that isn't the form's answer is an error, not a test that went one way or the other. */
+	public function test_a_test_answer_without_delivered_is_an_error(): void {
+		Api::serve(self::$monokulo);
+		self::$monokulo->respond('POST', '/api/v1/webhook-tests', 200, ['event_id' => 'evt_1']);
+
+		$this->expectException(ApiError::class);
+		$this->client()->sendTestWebhook($this->connection());
+	}
+
 	/** A key the entry doesn't offer send-logs sends nothing. */
 	public function test_without_the_send_logs_form_nothing_is_sent(): void {
 		$entry = Api::entry();

@@ -33,6 +33,9 @@ final class Whmcs {
 				Capsule::table($table)->truncate();
 			}
 		}
+		if (Capsule::schema()->hasTable('mod_monokulo_setting')) {
+			Capsule::table('mod_monokulo_setting')->where('name', '<>', 'link_key')->delete();
+		}
 		Capsule::table('tblpaymentgateways')->where('gateway', Plugin::MODULE)->whereNotIn('setting', ['name', 'type', 'visible'])->delete();
 		Capsule::table('tblconfiguration')->updateOrInsert(['setting' => 'SystemURL'], ['value' => self::URL]);
 		$_SESSION = [];

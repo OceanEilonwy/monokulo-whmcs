@@ -12,6 +12,9 @@ namespace Monokulo\Whmcs;
  * - `GET ?action=connect`: the settings page's Connect button. Sends the
  *   admin's browser to Monokulo to sign in and pick (or set up) the store.
  * - `GET ?action=return`: where the connect flow comes back with its token.
+ * - `GET ?action=test`: the settings page's Test connection. Has Monokulo
+ *   send this WHMCS's webhook a test delivery, and goes back to the
+ *   settings page saying how it went.
  */
 final class Callback {
 	private Trace $trace;
@@ -48,6 +51,8 @@ final class Callback {
 			$response = $this->connect($request);
 		} elseif ($request->method === 'GET' && $action === 'return') {
 			$response = $this->connectReturn($request);
+		} elseif ($request->method === 'GET' && $action === 'test') {
+			$response = $this->test($request);
 		} else {
 			$response = Response::text(404, 'Not found');
 		}
@@ -220,6 +225,55 @@ final class Callback {
 		$this->log->info(sprintf('%s connected to Monokulo as %s%s.', $host, $credentials['public_key'], $credentials['onion_api'] !== null ? ', on Tor at ' . $credentials['onion_api'] : ''));
 
 		return 'monokulo_connected=1';
+	}
+
+	/**
+	 * Test connection: the entry's `send-test-webhook` form has Monokulo
+	 * send this WHMCS's webhook a signed `webhook.test` now (which this
+	 * callback receives, in another request, while this one waits), and the
+	 * admin goes back to the settings page with how it went (TestWebhook).
+	 */
+	private function test(Request $request): Response {
+		if (!$this->whmcs->adminSignedIn()) {
+			return Response::page(403, 'error_test_admin');
+		}
+		$return = $request->get('return');
+		if (!Links::testIsGenuine($this->repository->linkKey(), $return, (int)$request->get('t'), $request->get('sig'), $this->now)) {
+			return Response::page(400, 'error_test_link');
+		}
+
+		return Response::redirect(Links::with($return, $this->sendTest()));
+	}
+
+	/** Sends the test webhook; the query string telling the settings page how it went. */
+	private function sendTest(): string {
+		$connection = $this->connection();
+		if (!$connection) {
+			return TestWebhook::outcome('not-connected');
+		}
+		try {
+			$answer = $this->client()->sendTestWebhook($connection);
+		} catch (ApiError $e) {
+			$this->log->warning(sprintf('Test connection: Monokulo refused to send a test webhook: HTTP %d%s: %s%s', $e->status, $e->problem !== '' ? ' ' . $e->problem : '', $e->detail, $e->merchantHint()));
+
+			return TestWebhook::fromProblem($e);
+		} catch (TransportError $e) {
+			$this->log->error(sprintf('Test connection: could not reach %s: %s', $connection->api, $e->getMessage()));
+
+			return TestWebhook::outcome('unreachable');
+		}
+		if ($answer === null) {
+			$this->log->warning('Test connection: your Monokulo offers no send-test-webhook form (it is older than this gateway).');
+
+			return TestWebhook::outcome('unoffered');
+		}
+		if ($answer['delivered'] === true) {
+			$this->log->info(sprintf('Test connection: test webhook %s delivered (HTTP %s in %s ms).', $answer['event_id'], json_encode($answer['status'] ?? null), json_encode($answer['duration_ms'] ?? null)));
+		} else {
+			$this->log->warning(sprintf('Test connection: test webhook %s not delivered: %s', $answer['event_id'], is_string($answer['error'] ?? null) ? $answer['error'] : 'no error given'));
+		}
+
+		return TestWebhook::fromAnswer($answer);
 	}
 
 	/** This WHMCS's connection, or null before it has connected. */

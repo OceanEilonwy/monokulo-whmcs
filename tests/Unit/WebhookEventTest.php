@@ -15,7 +15,16 @@ final class WebhookEventTest extends TestCase {
 		$this->assertNotNull($event);
 		$this->assertSame($delivery['headers']['X-Monokulo-Event'], $event->event);
 		$this->assertSame($delivery['headers']['X-Monokulo-Event-Id'], $event->eventId);
-		$this->assertSame(Vectors::orderId(), $event->orderId);
+		$this->assertSame($event->event === 'webhook.test' ? null : Vectors::orderId(), $event->orderId);
+		$this->assertSame(json_decode($delivery['body'], true)['created_at'], $event->createdAt);
+	}
+
+	/** The test delivery names the store and the webhook, and no order. */
+	public function test_the_test_delivery_has_no_order(): void {
+		$event = WebhookEvent::parse(Vectors::delivery('webhook.test')['body']);
+
+		$this->assertSame(['webhook.test', 'evt_0000000000000012', null, null, null], [$event->event, $event->eventId, $event->orderId, $event->txid, $event->dashboardUrl]);
+		$this->assertSame(1760020332, $event->createdAt);
 	}
 
 	public function test_the_double_spend_events_carry_their_transaction(): void {
@@ -25,9 +34,9 @@ final class WebhookEventTest extends TestCase {
 		$this->assertNull(WebhookEvent::parse(Vectors::delivery('order.paid')['body'])->txid);
 	}
 
-	/** Every delivery links the order's page on the merchant's dashboard, absolute. */
+	/** Every order's delivery links the order's page on the merchant's dashboard, absolute. */
 	public function test_every_published_delivery_links_the_order_in_monokulo(): void {
-		foreach (Vectors::deliveries() as $name => $delivery) {
+		foreach (Vectors::orderDeliveries() as $name => $delivery) {
 			$href = json_decode($delivery['body'], true)['_links']['mk:dashboard-order']['href'];
 			$this->assertStringStartsWith('https://', $href, $name);
 			$this->assertSame($href, WebhookEvent::parse($delivery['body'])->dashboardUrl, $name);
@@ -56,7 +65,7 @@ final class WebhookEventTest extends TestCase {
 			'a list'            => ['[1,2]'],
 			'no event'          => ['{"event_id":"evt_1","order_id":"o1"}'],
 			'no event id'       => ['{"event":"order.paid","order_id":"o1"}'],
-			'no order id'       => ['{"event":"order.paid","event_id":"evt_1"}'],
+			'empty order id'    => ['{"event":"order.paid","event_id":"evt_1","order_id":""}'],
 			'empty event id'    => ['{"event":"order.paid","event_id":"","order_id":"o1"}'],
 			'numeric order id'  => ['{"event":"order.paid","event_id":"evt_1","order_id":5}'],
 		];

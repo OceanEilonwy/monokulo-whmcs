@@ -5,13 +5,14 @@ namespace Monokulo\Whmcs;
 
 /**
  * The calls the shop's server makes to Monokulo: redeem a connect token,
- * create an order, and (when the merchant turned it on) send its warnings
+ * create an order, send its webhook a test delivery (the settings page's
+ * Test connection), and (when the merchant turned it on) send its warnings
  * and errors.
  *
  * Orders go through Monokulo's HTTP API (HAL-FORMS): the store's secret key
  * in `Authorization: Bearer` picks the store, and the API's entry, which
  * the connect flow gave, offers the forms it may use (`create-order`,
- * `send-logs`). The entry is kept as its `Cache-Control` says (see
+ * `send-logs`, `send-test-webhook`). The entry is kept as its `Cache-Control` says (see
  * EntryCache), so making an order is usually one request; it is read again
  * when it has expired (with `If-None-Match`), and at once when a form from
  * a kept copy is refused with 401, 404 or 405. Every address is a link or
@@ -114,6 +115,31 @@ final class Client {
 	}
 
 	/**
+	 * Has Monokulo send this WHMCS's webhook (the one it registered when it
+	 * connected) a signed `webhook.test` delivery now, with the entry's
+	 * `send-test-webhook` form, and returns how it went once the receiver
+	 * has answered: `delivered`, `status`, `duration_ms`, `error`,
+	 * `next_attempt_at`, `event_id` (see WebhookTest). Null when the key
+	 * isn't offered the form (a Monokulo from before it).
+	 *
+	 * @return array<string, mixed>|null
+	 *
+	 * @throws ApiError|TransportError
+	 */
+	public function sendTestWebhook(Connection $connection): ?array {
+		[$response] = $this->submit($connection, 'send-test-webhook', [], 30);
+		if ($response === null) {
+			return null;
+		}
+		$answer = $this->decode($response, [200]);
+		if (!is_bool($answer['delivered'] ?? null) || !is_string($answer['event_id'] ?? null)) {
+			throw new ApiError($response->status, 'no delivered or event_id: ' . $response->body);
+		}
+
+		return $answer;
+	}
+
+	/**
 	 * The shop's warnings and errors, for the merchant to read in Monokulo,
 	 * through the entry's `send-logs` form. Best effort: nothing is sent when
 	 * the key isn't offered the form, and an unreachable Monokulo is ignored
@@ -158,7 +184,9 @@ final class Client {
 		while (true) {
 			$form = $entry->form($name);
 			if ($form !== null) {
-				$response = $this->request($form['method'], $form['target'], $this->headers('application/json', $connection), (string)json_encode($body), $timeoutSeconds);
+				// An empty body is the empty object (`{}`), never a list.
+				$json = $body === [] ? '{}' : (string)json_encode($body);
+				$response = $this->request($form['method'], $form['target'], $this->headers('application/json', $connection), $json, $timeoutSeconds);
 				if (!in_array($response->status, self::STALE, true) || $entry->fresh) {
 					return [$response, $form['target']];
 				}

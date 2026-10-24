@@ -62,6 +62,8 @@ final class WebhookOverHttpTest extends TestCase {
 			$this->assertSame(200, $this->deliver($name), $name);
 		}
 		$this->assertCount(1, Whmcs::payments($this->invoice));
+		$this->assertCount(count(Vectors::orderDeliveries()), Whmcs::gatewayLog());
+		$this->assertSame('evt_0000000000000012', (new Repository(Capsule::connection()))->lastTestWebhook()['event_id'] ?? null, 'the test delivery is kept');
 	}
 
 	/** Its own (old) signature: too late now. */

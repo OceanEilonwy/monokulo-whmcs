@@ -5,8 +5,8 @@ namespace Monokulo\Whmcs;
 
 /**
  * The gateway module's functions (modules/gateways/monokulo.php): its
- * metadata, its settings page with the connection and the Connect button,
- * the check on saving them, and the Pay with Monero link on an invoice.
+ * metadata, its settings page with the connection and the Connect and
+ * Test connection buttons, the check on saving them, and the Pay with Monero link on an invoice.
  */
 final class Gateway {
 	private const CONNECT_ERRORS = ['address', 'host', 'finish', 'unavailable', 'busy', 'unreachable', 'callback'];
@@ -28,9 +28,10 @@ final class Gateway {
 
 	/**
 	 * The settings page's fields. `UsageNotes` (a System field WHMCS shows
-	 * as a note) carries the connection and the Connect button.
+	 * as a note) carries the connection, the last test webhook received,
+	 * the Connect and Test connection buttons, and how a test went.
 	 *
-	 * @param array<string, mixed> $query the settings page's query (how a connect attempt went)
+	 * @param array<string, mixed> $query the settings page's query (how a connect attempt or a test went)
 	 * @param string $scriptName the settings page's script (`/admin/configgateways.php`), whose folder is the admin area's
 	 *
 	 * @return array<string, array<string, mixed>>
@@ -112,6 +113,8 @@ final class Gateway {
 			$lines[] = '<strong>' . Text::html('error_connect_' . $error) . '</strong>';
 		}
 
+		$notice = TestWebhook::notice($query);
+
 		if (!$connection) {
 			$lines[] = Text::html('text_not_connected');
 		} else {
@@ -119,17 +122,26 @@ final class Gateway {
 			$lines[] = $connection->onionApi !== null
 				? Text::escape(sprintf(Text::get('text_onion'), (string)parse_url($connection->onionApi, PHP_URL_HOST)))
 				: Text::html('text_no_onion');
+			$test = $repository->lastTestWebhook();
+			$lines[] = $test !== null
+				? Text::escape(sprintf(Text::get('text_last_test'), date('Y-m-d H:i:s', $test['received_at']), $test['event_id']))
+				: Text::html('text_no_test');
 		}
 
 		if (ConnectLink::address($this->whmcs->setting('address')) === null) {
 			$lines[] = Text::html('text_address_first');
 		} else {
-			$url = Links::connect($systemUrl, $repository->linkKey(), $this->adminReturn($systemUrl, $scriptName), $now);
-			$lines[] = '<a href="' . Text::escape($url) . '" class="btn btn-default btn-sm">' . Text::html($connection ? 'button_reconnect' : 'button_connect') . '</a>';
+			$return = $this->adminReturn($systemUrl, $scriptName);
+			$url = Links::connect($systemUrl, $repository->linkKey(), $return, $now);
+			$buttons = '<a href="' . Text::escape($url) . '" class="btn btn-default btn-sm">' . Text::html($connection ? 'button_reconnect' : 'button_connect') . '</a>';
+			if ($connection) {
+				$buttons .= ' <a href="' . Text::escape(Links::test($systemUrl, $repository->linkKey(), $return, $now)) . '" class="btn btn-default btn-sm">' . Text::html('button_test') . '</a>';
+			}
+			$lines[] = $buttons;
 		}
 		$lines[] = '<small>' . Text::escape(sprintf(Text::get('text_webhook'), Links::callback($systemUrl))) . '</small>';
 
-		return implode('<br>', $lines);
+		return $notice . implode('<br>', $lines);
 	}
 
 	/**

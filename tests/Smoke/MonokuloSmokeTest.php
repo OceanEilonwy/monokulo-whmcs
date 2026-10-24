@@ -1,6 +1,7 @@
 <?php
 namespace Monokulo\Whmcs\Tests\Smoke;
 
+use Monokulo\Whmcs\Repository;
 use Monokulo\Whmcs\Tests\Support\Api;
 use Monokulo\Whmcs\Tests\Support\Browser;
 use Monokulo\Whmcs\Tests\Support\Page;
@@ -28,7 +29,12 @@ use WHMCS\Database\Capsule;
  *    again; once the kept entry has expired, it is asked for again;
  * 6. a client pays an invoice in EUR, for which Monokulo has no rate (the
  *    stand-in rate provider rate limits it): no order, and the client is
- *    asked to try again when Monokulo says.
+ *    asked to try again when Monokulo says;
+ * 7. the connection is tested end to end: the entry's send-test-webhook
+ *    form has Monokulo send WHMCS's webhook a signed `webhook.test`, which
+ *    WHMCS's receiver checks, keeps and answers 2xx to, changing no order;
+ *    then the merchant presses Test connection on the settings page, which
+ *    says it was delivered (two tests a run, under Monokulo's 6 a minute).
  *
  * And the stand-in Monokulo's answers (tests/Support/Api.php) are checked
  * against the real one's API and its OpenAPI document, and, with
@@ -135,11 +141,69 @@ final class MonokuloSmokeTest extends TestCase {
 		$this->assertSame(200, $dashboard->status);
 		$this->assertStringContainsString($orderId, $dashboard->body);
 
+		$this->testTheConnection($orderId);
+
 		// A key Monokulo doesn't know is refused at the entry, as a problem.
 		[$refused, $refusedHeaders, $status] = $this->api('/api/v1', 'sk_unknown');
 		$this->assertSame(401, $status);
 		$this->assertStringStartsWith(Api::PROBLEM, $refusedHeaders['content-type']);
 		$this->assertSame('https://docs.monokulo.com/problems/unauthorized', $refused['type']);
+	}
+
+	/**
+	 * The test webhook, end to end: sent with the entry's form (followed,
+	 * as WHMCS does), received and kept by WHMCS's receiver, which checked
+	 * its signature (it keeps nothing it refused), with no order, invoice
+	 * or gateway log changed; then sent again by pressing Test connection.
+	 */
+	private function testTheConnection(string $orderId): void {
+		$orders = Whmcs::rows('mod_monokulo_order');
+		$invoices = array_column(Whmcs::rows('tblinvoices'), 'status', 'id');
+		$gatewayLog = Whmcs::gatewayLog();
+		$this->assertNull((new Repository(Capsule::connection()))->lastTestWebhook());
+
+		[$entry] = $this->api('/api/v1');
+		$form = $entry['_templates']['send-test-webhook'];
+		$this->assertSame('POST', $form['method']);
+		$this->assertStringStartsWith($this->prefix . '/', $form['target']);
+		[$answer, $status] = $this->send($form['method'], substr($form['target'], strlen($this->prefix)), '{}');
+		$this->assertSame(200, $status, (string)json_encode($answer));
+		$this->assertTrue($answer['delivered'], (string)json_encode($answer));
+		$this->assertGreaterThanOrEqual(200, $answer['status']);
+		$this->assertLessThan(300, $answer['status']);
+		$this->assertArrayNotHasKey('error', $answer);
+		$this->assertArrayNotHasKey('next_attempt_at', $answer);
+		$this->assertStringStartsWith('wh_', $answer['webhook_id']);
+		$this->assertSame([], array_diff(array_keys(Api::webhookTest()), array_keys($answer)), 'the stand-in\'s answer has no field the real one lacks');
+
+		$kept = (new Repository(Capsule::connection()))->lastTestWebhook();
+		$this->assertSame($answer['event_id'], $kept['event_id'] ?? null, 'WHMCS received the event Monokulo sent');
+		$this->assertEqualsWithDelta(time(), $kept['received_at'], 60);
+		$this->assertStringContainsString('Test webhook ' . $answer['event_id'] . ' received from Monokulo', Whmcs::logs());
+		$this->assertStringNotContainsString('Webhook refused', Whmcs::logs(), 'its signature checked out');
+		$this->assertSame($orders, Whmcs::rows('mod_monokulo_order'), 'no order changed');
+		$this->assertSame($invoices, array_column(Whmcs::rows('tblinvoices'), 'status', 'id'), 'no invoice changed');
+		$this->assertSame($gatewayLog, Whmcs::gatewayLog());
+		$this->assertSame([], Whmcs::rows('mod_monokulo_event'), 'nothing applied');
+		[$read] = $this->api('/api/v1/orders/' . $orderId);
+		$this->assertSame('pending', $read['status']);
+
+		// The settings page says so, and its Test connection sends another.
+		$settings = $this->browser->get(Whmcs::URL . 'admin/configgateways.php');
+		$this->assertStringContainsString('Last test webhook received: ' . date('Y-m-d H:i:s', $kept['received_at']) . ' (' . $answer['event_id'] . ').', $settings->text());
+		$this->assertMatchesRegularExpression('#href="([^"]*action=test[^"]*)"#', $settings->body);
+		preg_match('#href="([^"]*action=test[^"]*)"#', $settings->body, $m);
+		$pressed = $this->browser->get(html_entity_decode($m[1], ENT_QUOTES));
+		$this->assertSame(303, $pressed->status, $pressed->text());
+		$back = $this->browser->get((string)$pressed->location());
+		$this->assertMatchesRegularExpression('#<div class="alert alert-success" role="alert">Test webhook delivered: WHMCS answered HTTP 200 in \d+ ms \(event (evt_[0-9a-f]+)\)\.</div>#', $back->body, $back->text());
+		preg_match('#\(event (evt_[0-9a-f]+)\)#', $back->body, $event);
+		$this->assertNotSame($answer['event_id'], $event[1], 'a new test');
+		$this->assertSame($event[1], (new Repository(Capsule::connection()))->lastTestWebhook()['event_id'] ?? null);
+		$this->assertStringContainsString('Last test webhook received:', $back->text());
+		$this->assertStringContainsString($event[1], $back->text());
+		$this->assertSame($orders, Whmcs::rows('mod_monokulo_order'));
+		$this->assertSame($gatewayLog, Whmcs::gatewayLog());
 	}
 
 	/** The handshake's refusals are problems, which the gateway reads (its name, its detail). */
@@ -204,6 +268,21 @@ final class MonokuloSmokeTest extends TestCase {
 		$this->assertSame(['send-logs', ['sk']], [$logs['x-hal-forms-template'], $logs['x-monokulo-keys']]);
 		$this->assertSame(['entries'], $schemas['LogsInput']['required']);
 		$this->assertSame(['entries'], array_column(Api::entry()['_templates']['send-logs']['properties'], 'name'));
+
+		$tests = $openapi['paths']['/api/v1/webhook-tests']['post'];
+		$this->assertSame(['send-test-webhook', ['sk']], [$tests['x-hal-forms-template'], $tests['x-monokulo-keys']]);
+		$this->assertSame([], $schemas['WebhookTestsInput']['required'] ?? [], 'an empty object tests the plugin\'s own webhook');
+		$this->assertSame(['webhook_id'], array_keys($schemas['WebhookTestsInput']['properties']));
+		$this->assertSame(['webhook_id'], array_column(Api::entry()['_templates']['send-test-webhook']['properties'], 'name'));
+		$answer = $schemas['WebhookTests'];
+		$this->assertSame([], array_diff(array_keys(Api::webhookTest(false)), array_keys($answer['properties'])), 'every field the stand-in answers');
+		foreach (['delivered', 'event_id', 'duration_ms'] as $field) {
+			$this->assertContains($field, $answer['required'], $field);
+		}
+		foreach (['status', 'error', 'next_attempt_at'] as $field) {
+			$this->assertNotContains($field, $answer['required'], $field);
+		}
+		$this->assertArrayHasKey('Retry-After', $tests['responses']['429']['headers']);
 
 		// The order: its fields and links, and the pages they lead to.
 		$order = $schemas['Order'];
@@ -285,6 +364,7 @@ final class MonokuloSmokeTest extends TestCase {
 			['/api/v1', 'get', Api::ENTRY_PROBLEMS],
 			['/plugins/connect/{slug}/finish', 'post', Api::FINISH_PROBLEMS],
 			['/api/v1/logs', 'post', Api::LOGS_PROBLEMS],
+			['/api/v1/webhook-tests', 'post', Api::WEBHOOK_TEST_PROBLEMS],
 		];
 		foreach ($routes as [$path, $method, $problems]) {
 			$all = [];
@@ -297,6 +377,18 @@ final class MonokuloSmokeTest extends TestCase {
 				$this->assertArrayHasKey($name, $recorded, $path);
 				$this->assertEquals($recorded[$name], $problem, $path . ' ' . $name);
 			}
+		}
+
+		// The send-test-webhook form's recorded answer is the stand-in's.
+		$tests = $this->examples($openapi['paths']['/api/v1/webhook-tests']['post']['responses']['200']['content'][Api::HAL_FORMS]);
+		$this->assertArrayHasKey('sk', $tests);
+		$standIn = Api::webhookTest();
+		$this->assertEquals(array_diff_key($standIn, ['_templates' => 1]), array_diff_key($tests['sk'], ['_templates' => 1]), 'the recorded test delivered');
+		foreach ($tests as $name => $example) {
+			$this->assertSame(['send-test-webhook'], array_keys($example['_templates']), $name);
+			$form = $example['_templates']['send-test-webhook'];
+			$this->assertSame([$standIn['_templates']['send-test-webhook']['method'], $standIn['_templates']['send-test-webhook']['target']], [$form['method'], $form['target']], $name);
+			$this->assertSame(array_column($standIn['_templates']['send-test-webhook']['properties'], 'name'), array_column($form['properties'], 'name'), $name);
 		}
 
 		$this->assertSame('/api/v1', $connections['no-key']['api']);
@@ -359,6 +451,26 @@ final class MonokuloSmokeTest extends TestCase {
 		}
 
 		return [json_decode($body, true), $headers, $status];
+	}
+
+	/**
+	 * Sends `body` (JSON) to a path of the real API with the store's secret
+	 * key WHMCS keeps: its JSON and status.
+	 *
+	 * @return array{0: array<string, mixed>, 1: int}
+	 */
+	private function send(string $method, string $path, string $body): array {
+		$curl = curl_init($this->monokulo . $path);
+		curl_setopt_array($curl, [
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_CUSTOMREQUEST  => $method,
+			CURLOPT_POSTFIELDS     => $body,
+			CURLOPT_TIMEOUT        => 30,
+			CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . Whmcs::rows('mod_monokulo_connection')[0]['secret_token'], 'Accept: ' . Api::HAL_FORMS, 'Content-Type: application/json', 'Monokulo-Client: ' . \Monokulo\Whmcs\Plugin::client()],
+		]);
+		$answer = (string)curl_exec($curl);
+
+		return [(array)json_decode($answer, true), (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE)];
 	}
 
 	/** A fresh Monokulo asks for its operator first; that account is the merchant's too. */
