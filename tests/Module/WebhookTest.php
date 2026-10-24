@@ -209,8 +209,46 @@ final class WebhookTest extends WhmcsTestCase {
 		foreach (Vectors::deliveries() as $name => $delivery) {
 			$this->assertSame(200, $this->deliver($delivery['body'], $delivery['headers']['X-Monokulo-Signature']), $name);
 		}
-		$this->assertCount(count(Vectors::deliveries()), Whmcs::gatewayLog());
+		$this->assertCount(count(Vectors::orderDeliveries()), Whmcs::gatewayLog(), 'the test delivery is no invoice\'s');
 		$this->assertCount(1, Whmcs::payments($this->invoice));
+	}
+
+	/**
+	 * The test delivery: checked like any other, answered 200, kept as the
+	 * last test webhook received, and nothing else changes.
+	 */
+	public function test_the_test_delivery_is_accepted_and_changes_no_order(): void {
+		$orders = Whmcs::rows('mod_monokulo_order');
+
+		$this->assertSame(200, $this->deliverVector('webhook.test'));
+
+		$this->assertSame(['event_id' => 'evt_0000000000000012', 'created_at' => 1760020332, 'received_at' => Vectors::sentAt()], $this->repository()->lastTestWebhook());
+		$this->assertSame('Unpaid', Whmcs::invoiceStatus($this->invoice));
+		$this->assertSame([], Whmcs::payments($this->invoice));
+		$this->assertSame([], Whmcs::gatewayLog());
+		$this->assertSame([], Whmcs::rows('mod_monokulo_event'));
+		$this->assertSame($orders, Whmcs::rows('mod_monokulo_order'));
+		$this->assertStringContainsString('Test webhook evt_0000000000000012 received from Monokulo', Whmcs::logs());
+	}
+
+	/** Each test replaces the one before; one sent again is still fine. */
+	public function test_the_newest_test_delivery_is_the_one_kept(): void {
+		$this->assertSame(200, $this->deliverVector('webhook.test'));
+		$body = str_replace('evt_0000000000000012', 'evt_newer', Vectors::delivery('webhook.test')['body']);
+		$this->assertSame(200, $this->deliver($body, $this->signed($body), Vectors::sentAt() + 60));
+		$this->assertSame(200, $this->deliver($body, $this->signed($body), Vectors::sentAt() + 61));
+
+		$this->assertSame(['event_id' => 'evt_newer', 'created_at' => 1760020332, 'received_at' => Vectors::sentAt() + 61], $this->repository()->lastTestWebhook());
+	}
+
+	/** A test delivery that isn't Monokulo's is refused like any other, and not kept. */
+	public function test_a_forged_test_delivery_is_refused_and_not_kept(): void {
+		$body = Vectors::delivery('webhook.test')['body'];
+		$t = Vectors::sentAt();
+
+		$this->assertSame(401, $this->deliver($body, 't=' . $t . ',v1=' . hash_hmac('sha256', $t . '.' . $body, 'whsec_someone_else')));
+		$this->assertSame(401, $this->deliver($body, ''));
+		$this->assertNull($this->repository()->lastTestWebhook());
 	}
 
 	/** A delivery whose answer was lost is sent again; the second changes nothing. */
@@ -252,6 +290,28 @@ final class WebhookTest extends WhmcsTestCase {
 		Capsule::table('mod_monokulo_order')->delete();
 
 		$this->assertSame(404, $this->deliverVector('order.paid'));
+	}
+
+	/** Not about any order, or about one this WHMCS doesn't have: a 4xx would only be retried. */
+	public function test_an_unknown_event_is_accepted_whatever_it_names(): void {
+		foreach ([
+			['api_version' => 2, 'event_id' => 'evt_store', 'event' => 'store.updated', 'created_at' => 1, 'store' => ['id' => 's']],
+			['api_version' => 2, 'event_id' => 'evt_other', 'event' => 'order.refunded', 'created_at' => 1, 'order_id' => 'order_not_here'],
+		] as $data) {
+			$body = (string)json_encode($data);
+			$this->assertSame(200, $this->deliver($body, $this->signed($body)), $data['event']);
+		}
+		$this->assertSame([], Whmcs::gatewayLog());
+		$this->assertSame([], Whmcs::rows('mod_monokulo_event'));
+		$this->assertNull($this->repository()->lastTestWebhook());
+	}
+
+	/** An order's event that names no order is malformed. */
+	public function test_an_order_event_without_its_order_is_a_bad_request(): void {
+		$body = (string)json_encode(['api_version' => 2, 'event_id' => 'evt_x', 'event' => 'order.paid', 'created_at' => 1]);
+
+		$this->assertSame(400, $this->deliver($body, $this->signed($body)));
+		$this->assertSame('Unpaid', Whmcs::invoiceStatus($this->invoice));
 	}
 
 	public function test_an_event_this_version_does_not_know_is_accepted_and_ignored(): void {

@@ -10,14 +10,21 @@ namespace Monokulo\Whmcs;
  *
  * - 401: WHMCS isn't connected, or the signature doesn't check out (wrong
  *   secret, changed body, more than five minutes off).
- * - 400: correctly signed, but not a webhook envelope.
+ * - 400: correctly signed, but not a webhook envelope, or an order's event
+ *   without its order.
  * - 404: no invoice here for that Monokulo order (retried, in case it is
  *   still being saved).
  * - 200: applied, or already applied before (a repeat changes nothing),
- *   or an event this version doesn't know (accepted and logged).
+ *   or an event this version doesn't know (accepted and logged, whether it
+ *   names an order or not: a 4xx would be retried for nothing), or a test
+ *   delivery (`webhook.test`), which changes no invoice and is kept as the
+ *   last test webhook received, for the settings page.
  * - 500: applying it failed; the event is given back so the retry applies it.
  */
 final class WebhookReceiver {
+	/** A test delivery: the merchant pressed Send a test webhook, or the settings page's Test connection. */
+	public const TEST = 'webhook.test';
+
 	public function __construct(
 		private readonly Repository $repository,
 		private readonly InvoiceUpdater $updater,
@@ -37,17 +44,28 @@ final class WebhookReceiver {
 
 			return 400;
 		}
-		$order = $this->repository->findOrder($event->orderId);
-		if (!$order) {
-			$this->log->warning(sprintf('Webhook %s for Monokulo order %s: no such order in this WHMCS.', $event->eventId, $event->orderId));
+		if ($event->event === self::TEST) {
+			$this->repository->recordTestWebhook($event->eventId, $event->createdAt, $now);
+			$this->log->info(sprintf('Test webhook %s received from Monokulo: deliveries reach WHMCS.', $event->eventId));
 
-			return 404;
+			return 200;
 		}
 		$decision = StatusPolicy::decide($event);
 		if (!$decision) {
 			$this->log->warning(sprintf('Webhook %s: unknown event "%s", accepted and ignored.', $event->eventId, $event->event));
 
 			return 200;
+		}
+		if ($event->orderId === null) {
+			$this->log->error(sprintf('Webhook %s refused: a %s event without an order_id: %s', $event->eventId, $event->event, $body));
+
+			return 400;
+		}
+		$order = $this->repository->findOrder($event->orderId);
+		if (!$order) {
+			$this->log->warning(sprintf('Webhook %s for Monokulo order %s: no such order in this WHMCS.', $event->eventId, $event->orderId));
+
+			return 404;
 		}
 		if (!$this->repository->claimEvent($event->eventId, $event->orderId, $now)) {
 			return 200;

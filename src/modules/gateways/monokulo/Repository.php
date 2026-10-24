@@ -20,7 +20,8 @@ use Illuminate\Database\Schema\Blueprint;
  *   is sent again (its answer was lost) changes nothing the second time.
  * - `mod_monokulo_nonce`: connect attempts an admin started, each good once
  *   and for ten minutes.
- * - `mod_monokulo_setting`: the key that signs the gateway's own links.
+ * - `mod_monokulo_setting`: the key that signs the gateway's own links, and
+ *   the last test webhook received.
  *
  * Deactivating the gateway keeps these tables: invoices' payments refer to
  * them, and activating it again picks the connection back up.
@@ -128,8 +129,12 @@ final class Repository implements EntryCache {
 		);
 	}
 
-	/** Keeps a new connection: new keys, so the entry kept for the old ones goes. */
+	/**
+	 * Keeps a new connection: new keys and a new webhook, so the entry kept
+	 * for the old ones goes, and so does the last test webhook received.
+	 */
 	public function saveConnection(Connection $c): void {
+		$this->db->table('mod_monokulo_setting')->where('name', 'last_test_webhook')->delete();
 		$this->db->table('mod_monokulo_connection')->updateOrInsert(['host' => $c->host], [
 			'api'                => $c->api,
 			'public_key'         => $c->publicKey,
@@ -174,6 +179,36 @@ final class Repository implements EntryCache {
 		$this->db->table('mod_monokulo_setting')->insertOrIgnore(['name' => 'link_key', 'value' => bin2hex(random_bytes(32))]);
 
 		return (string)$this->db->table('mod_monokulo_setting')->where('name', 'link_key')->value('value');
+	}
+
+	/**
+	 * Keeps the test webhook (`webhook.test`) just received, in place of the
+	 * one before: its event id, when Monokulo made it (null when the body
+	 * didn't say), and when it arrived.
+	 */
+	public function recordTestWebhook(string $eventId, ?int $createdAt, int $receivedAt): void {
+		$this->db->table('mod_monokulo_setting')->updateOrInsert(['name' => 'last_test_webhook'], [
+			'value' => json_encode(['event_id' => $eventId, 'created_at' => $createdAt, 'received_at' => $receivedAt]),
+		]);
+	}
+
+	/**
+	 * The last test webhook received, or null before the first.
+	 *
+	 * @return array{event_id: string, created_at: ?int, received_at: int}|null
+	 */
+	public function lastTestWebhook(): ?array {
+		$value = $this->db->table('mod_monokulo_setting')->where('name', 'last_test_webhook')->value('value');
+		$data = is_string($value) ? json_decode($value, true) : null;
+		if (!is_array($data) || !is_string($data['event_id'] ?? null) || !is_int($data['received_at'] ?? null)) {
+			return null;
+		}
+
+		return [
+			'event_id'    => $data['event_id'],
+			'created_at'  => is_int($data['created_at'] ?? null) ? $data['created_at'] : null,
+			'received_at' => $data['received_at'],
+		];
 	}
 
 	/** Remembers a connect attempt an admin started; returns its nonce. */

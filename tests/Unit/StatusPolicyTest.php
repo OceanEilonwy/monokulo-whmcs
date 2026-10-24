@@ -4,6 +4,7 @@ namespace Monokulo\Whmcs\Tests\Unit;
 use Monokulo\Whmcs\StatusPolicy;
 use Monokulo\Whmcs\Tests\Support\Vectors;
 use Monokulo\Whmcs\WebhookEvent;
+use Monokulo\Whmcs\WebhookReceiver;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -28,6 +29,11 @@ final class StatusPolicyTest extends TestCase {
 		$seen = [];
 		foreach (Vectors::deliveries() as $name => $delivery) {
 			$event = WebhookEvent::parse($delivery['body']);
+			if ($event->event === WebhookReceiver::TEST) {
+				// The receiver's own: it changes no invoice.
+				$this->assertNull(StatusPolicy::decide($event), $name);
+				continue;
+			}
 			$this->assertArrayHasKey($event->event, self::TABLE, "Monokulo publishes $name, which the table doesn't cover");
 			[$result, $note, $paid, $expired] = self::TABLE[$event->event];
 			$decision = StatusPolicy::decide($event);

@@ -49,6 +49,29 @@ A Monokulo store is one web address: WHMCS connects by its System URL's
 host. If you change the System URL, connect again. **Connect again**
 replaces the keys (Monokulo replaces its webhook too).
 
+### Test connection
+
+Once connected, press **Test connection** beside **Connect again**.
+Monokulo sends WHMCS's webhook a signed test delivery (`webhook.test`)
+there and then, through the entry's `send-test-webhook` form, and the
+settings page says how it went, as a WHMCS notice:
+
+- *Test webhook delivered*, with the HTTP status WHMCS answered and how
+  long it took;
+- *not delivered*, with what went wrong (the status WHMCS answered, or
+  nothing answering) and when Monokulo tries it again;
+- *Too many test webhooks*: a store may send 6 a minute; wait the seconds
+  it says;
+- *Monokulo has no webhook for this WHMCS*: connect again.
+
+The settings also show the **Last test webhook received** (when, and its
+event id), whether it came from this button or from *Send a test webhook*
+on the webhook in Monokulo's store settings. The gateway checks a test
+delivery's signature like any other, answers it `200` and changes no
+invoice; connecting again clears it. Like Connect, the button works for an
+hour after the settings page was opened, and only in a browser signed in
+to the admin area.
+
 ### What connecting keeps
 
 Connecting hands WHMCS the store's keys and the entry of Monokulo's
@@ -63,7 +86,8 @@ Monokulo says (an hour), so a client's Pay with Monero is usually one
 request; it asks again when that is up (cheaply: Monokulo answers *not
 modified* while it's the same), and at once when Monokulo refuses a form
 from it. When **Send errors to Monokulo** is on, warnings and errors go to
-the entry's `send-logs` form. Monokulo's refusals
+the entry's `send-logs` form; **Test connection** uses its
+`send-test-webhook` form. Monokulo's refusals
 (`application/problem+json`) are in the Activity Log with their reason and
 a link to the problem's page.
 
@@ -137,6 +161,7 @@ account).
 | `order.cancelled` | Cancelled before it was paid (only Monokulo's POS cancels, and only its own orders, so an invoice's order isn't expected to be) | As expired | Cancelled: as expired |
 | `order.double_spend_detected` | A payment was double-spent and no longer counts | unchanged | Double spend: fraud alert (the status change, if any, comes as its own event) |
 | `order.double_spend_reversed` | That alert was wrong | unchanged | Double spend withdrawn |
+| `webhook.test` | A test delivery ([Test connection](#test-connection)) | unchanged | none: kept as the last test webhook received |
 
 Each entry links the order in Monokulo (`in_monokulo`): the webhook's
 `mk:dashboard-order` link.
@@ -173,7 +198,10 @@ Connecting registers WHMCS's webhook address with Monokulo:
 `https://<your WHMCS>/modules/gateways/callback/monokulo.php`. Each
 delivery is signed (`X-Monokulo-Signature`); the gateway refuses a missing
 or wrong signature and one more than five minutes old. Monokulo retries a
-delivery WHMCS didn't take; a delivery seen before changes nothing.
+delivery WHMCS didn't take; a delivery seen before changes nothing. A test
+delivery (`webhook.test`) and any event this version doesn't know are
+answered `200` and change nothing (a test is kept as the last one
+received: see [Test connection](#test-connection)).
 Deliveries and their answers are listed in Monokulo, in the store's
 settings under *Webhooks*.
 
@@ -237,7 +265,15 @@ scripts/test down
   checkout, and the kept entry is used
   and then revalidated; an invoice in a currency Monokulo has no rate for
   right now (the rate stand-in rate limits it) makes no order and asks the
-  client to try again. Nothing is paid. `scripts/smoke` runs it twice:
+  client to try again; then the connection is tested end to end: the
+  entry's `send-test-webhook` form has Monokulo send a real signed test
+  webhook, which must be `delivered` with a 2xx, kept by WHMCS's receiver
+  under the same event id, change no order or invoice, and show on the
+  settings page as the last test received; and **Test connection**,
+  pressed on the settings page, says it was delivered (two tests a run,
+  under Monokulo's 6 a minute; the smoke config allows Monokulo to deliver
+  to this machine, `webhooks.allow_private_urls`). Nothing is paid.
+  `scripts/smoke` runs it twice:
   with Monokulo on its own address, then served under a path through a
   prefix-stripping proxy (`tests/Support/prefix-proxy.php`). It also
   checks the stand-in Monokulo's answers (`tests/Support/Api.php`) against
@@ -279,6 +315,9 @@ release:
       invoice's Pay with Monero stays on it and opens the Monokulo
       checkout on its onion address.
 - [ ] A webhook sent again by Monokulo adds nothing.
+- [ ] **Test connection** shows WHMCS's green notice *Test webhook
+      delivered*, and the settings then show the last test webhook
+      received; *Send a test webhook* in Monokulo does too.
 - [ ] Warnings appear in the Activity Log; with module debug logging on,
       the rest in the Module Log.
 - [ ] Deactivating and activating again keeps the connection.

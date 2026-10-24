@@ -56,7 +56,17 @@ final class Vectors {
 		return self::deliveries()[$name];
 	}
 
-	/** The Monokulo order every vector is about. */
+	/**
+	 * The deliveries about an order: every one but the test delivery
+	 * (`webhook.test`), which names the store and the webhook instead.
+	 *
+	 * @return array<string, array{name: string, body: string, headers: array<string, string>}> keyed by name
+	 */
+	public static function orderDeliveries(): array {
+		return array_filter(self::deliveries(), static fn(array $d): bool => $d['headers']['X-Monokulo-Event'] !== 'webhook.test');
+	}
+
+	/** The Monokulo order every order vector is about. */
 	public static function orderId(): string {
 		return json_decode(self::delivery('order.paid')['body'], true)['order_id'];
 	}

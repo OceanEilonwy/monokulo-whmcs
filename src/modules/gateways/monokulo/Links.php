@@ -12,6 +12,7 @@ namespace Monokulo\Whmcs;
  *   emailed invoice may be paid days later.
  * - Connect, on the gateway's settings page: `?action=connect&return=…&t=…&sig=…`,
  *   good for an hour, and only for a browser signed in to the admin area.
+ * - Test connection, beside it: `?action=test&return=…&t=…&sig=…`, the same.
  */
 final class Links {
 	public const CALLBACK = 'modules/gateways/callback/monokulo.php';
@@ -43,7 +44,24 @@ final class Links {
 	}
 
 	public static function connectIsGenuine(string $key, string $return, int $t, string $sig, int $now): bool {
-		return $t <= $now && $now - $t <= self::CONNECT_TTL_SECONDS && hash_equals(self::sign($key, 'connect:' . $t . ':' . $return), $sig);
+		return self::adminIsGenuine('connect', $key, $return, $t, $sig, $now);
+	}
+
+	public static function test(string $systemUrl, string $key, string $return, int $now): string {
+		return self::callback($systemUrl) . '?' . http_build_query([
+			'action' => 'test',
+			'return' => $return,
+			't'      => $now,
+			'sig'    => self::sign($key, 'test:' . $now . ':' . $return),
+		], '', '&', PHP_QUERY_RFC3986);
+	}
+
+	public static function testIsGenuine(string $key, string $return, int $t, string $sig, int $now): bool {
+		return self::adminIsGenuine('test', $key, $return, $t, $sig, $now);
+	}
+
+	private static function adminIsGenuine(string $action, string $key, string $return, int $t, string $sig, int $now): bool {
+		return $t <= $now && $now - $t <= self::CONNECT_TTL_SECONDS && hash_equals(self::sign($key, $action . ':' . $t . ':' . $return), $sig);
 	}
 
 	/**
