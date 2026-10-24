@@ -7,8 +7,20 @@
  *
  * Except EUR: asked for it, it rate limits Monokulo (429, Retry-After 30),
  * as CoinGecko does when it's busy, so Monokulo has no rate for it.
+ *
+ * Monokulo also asks which currencies there are
+ * (/api/v3/simple/supported_vs_currencies): a JSON array of lowercase
+ * tickers, as CoinGecko answers, EUR among them, so EUR is refused for
+ * having no rate rather than for being unknown.
  */
-if (parse_url((string)$_SERVER['REQUEST_URI'], PHP_URL_PATH) !== '/api/v3/simple/price') {
+$path = parse_url((string)$_SERVER['REQUEST_URI'], PHP_URL_PATH);
+if ($path === '/api/v3/simple/supported_vs_currencies') {
+	header('Content-Type: application/json');
+	echo json_encode(['usd', 'eur', 'gbp', 'aud', 'cad', 'chf', 'jpy', 'nzd', 'sek', 'nok', 'dkk', 'pln', 'czk', 'brl', 'inr', 'zar', 'btc']);
+
+	return true;
+}
+if ($path !== '/api/v3/simple/price') {
 	http_response_code(404);
 
 	return true;
