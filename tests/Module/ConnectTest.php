@@ -219,10 +219,10 @@ final class ConnectTest extends WhmcsTestCase {
 
 	public static function finishFailures(): array {
 		return [
-			'no public address yet' => [503, Api::problem('no-public-address', 503, 'No public address', 'This Monokulo has no public address yet.'), 'unavailable'],
-			'token refused'         => [401, Api::problem('invalid-connect-code', 401, 'Unknown connect code', 'This code is unknown, used or expired.'), 'finish'],
-			'rate limited'          => [429, Api::problem('rate-limited', 429, 'Too many requests', 'Wait 30 seconds.'), 'busy'],
-			'failed after spending' => [500, Api::problem('internal', 500, 'Something went wrong', 'internal error'), 'finish'],
+			'no public address yet' => [503, Api::FINISH_PROBLEMS['no-public-address'], 'unavailable'],
+			'token refused'         => [401, Api::FINISH_PROBLEMS['invalid-connect-code'], 'finish'],
+			'rate limited'          => [429, Api::FINISH_PROBLEMS['rate-limited'], 'busy'],
+			'failed after spending' => [500, Api::FINISH_PROBLEMS['internal'], 'finish'],
 			'missing secret'        => [200, ['public_key' => 'pk', 'secret_token' => 'sk', 'api' => '/api/v1'], 'finish'],
 			'missing entry'         => [200, ['public_key' => 'pk', 'secret_token' => 'sk', 'webhook_signing_secret' => 'wh'], 'finish'],
 		];

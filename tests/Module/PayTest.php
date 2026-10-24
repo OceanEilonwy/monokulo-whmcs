@@ -72,6 +72,25 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertStringContainsString('Client sent to pay with Monero: ' . self::$monokulo->url . '/checkout/order_1', $log[0]['data']);
 	}
 
+	/**
+	 * Monokulo leaves out a field with no value rather than sending `null`:
+	 * an order body without its amount, currency, merchant order id,
+	 * description or cancelled_at is still the order, and what WHMCS keeps
+	 * is what it asked for.
+	 */
+	public function test_an_order_without_its_optional_fields_is_still_the_order(): void {
+		$invoice = Whmcs::invoice(['Starter - example.com' => '25.00'], 'USD');
+		self::$monokulo->respond('GET', '/api/v1', 200, Api::entry(), headers: Api::entryHeaders());
+		self::$monokulo->respond('POST', '/api/v1/orders', 201, Api::bareOrder(), headers: ['Content-Type' => Api::HAL_FORMS, 'Location' => '/api/v1/orders/order_1']);
+
+		$response = $this->get($this->payLink($invoice));
+
+		$this->assertSame(303, $response->status);
+		$this->assertSame(self::$monokulo->url . '/checkout/order_1', $response->headers['Location']);
+		$this->assertSame([['monokulo_order_id' => 'order_1', 'amount' => '25', 'currency' => 'USD']], array_map(static fn(array $r): array => array_intersect_key($r, array_flip(['monokulo_order_id', 'amount', 'currency'])), Whmcs::rows('mod_monokulo_order')));
+		$this->assertStringContainsString('25 USD', Whmcs::gatewayLog()[0]['data']);
+	}
+
 	/** Part paid already (by credit, say): only the balance is asked for. */
 	public function test_only_the_balance_is_asked_for(): void {
 		$invoice = Whmcs::invoice(['Hosting' => '100.00']);
@@ -183,9 +202,9 @@ final class PayTest extends WhmcsTestCase {
 
 	public static function monokuloFailures(): array {
 		return [
-			'rate limited'     => [Api::problem('rate-limited', 429, 'Too many requests', 'Wait 5 seconds.'), 'Monero payments are busy right now', 'rate limited'],
-			'key refused'      => [Api::problem('unauthorized', 401, 'No valid key', 'This key was not accepted.'), 'Monero payments are not available right now', 'connect again from the Monokulo gateway settings'],
-			'unknown currency' => [Api::problem('invalid-amount', 400, 'The order can\'t be priced', 'unknown currency: ABC'), 'currency can&#039;t be paid in Monero', 'unknown currency: ABC'],
+			'rate limited'     => [Api::ORDER_PROBLEMS['rate-limited'], 'Monero payments are busy right now', 'rate limited'],
+			'key refused'      => [Api::ORDER_PROBLEMS['unauthorized'], 'Monero payments are not available right now', 'connect again from the Monokulo gateway settings'],
+			'unknown currency' => [Api::ORDER_PROBLEMS['invalid-amount'], 'currency can&#039;t be paid in Monero', 'unknown currency: NOPE'],
 		];
 	}
 
@@ -207,8 +226,8 @@ final class PayTest extends WhmcsTestCase {
 
 	public static function tryAgainShortly(): array {
 		return [
-			'no exchange rate' => [Api::problem('rates-unavailable', 503, 'No exchange rate', 'No exchange rate for EUR right now.') + ['retry_after' => 60], ['Retry-After' => '60'], 'Monero prices are not available right now', 'no exchange rate for the invoice\'s currency right now', '60'],
-			'engine busy'      => [Api::problem('engine-unavailable', 503, 'Payment engine unavailable', 'The payment engine is busy.'), [], 'Monero payments are busy right now', 'payment engine is busy', null],
+			'no exchange rate' => [Api::ORDER_PROBLEMS['rates-unavailable'], ['Retry-After' => '42'], 'Monero prices are not available right now', 'no exchange rate for the invoice\'s currency right now', '42'],
+			'engine busy'      => [Api::ORDER_PROBLEMS['engine-unavailable'], [], 'Monero payments are busy right now', 'payment engine is busy', null],
 		];
 	}
 
@@ -429,7 +448,7 @@ final class PayTest extends WhmcsTestCase {
 	public function test_errors_are_forwarded_when_the_merchant_asked(): void {
 		Whmcs::setting('forwardErrors', 'on');
 		$invoice = Whmcs::invoice();
-		$this->monokuloCreates(problem: Api::problem('rate-limited', 429, 'Too many requests', 'Wait.'));
+		$this->monokuloCreates(problem: Api::ORDER_PROBLEMS['rate-limited']);
 		self::$monokulo->respond('POST', '/api/v1/logs', 204, '');
 
 		$this->get($this->payLink($invoice));
@@ -445,7 +464,7 @@ final class PayTest extends WhmcsTestCase {
 
 	public function test_errors_stay_in_whmcs_otherwise(): void {
 		$invoice = Whmcs::invoice();
-		$this->monokuloCreates(problem: Api::problem('rate-limited', 429, 'Too many requests', 'Wait.'));
+		$this->monokuloCreates(problem: Api::ORDER_PROBLEMS['rate-limited']);
 
 		$this->get($this->payLink($invoice));
 

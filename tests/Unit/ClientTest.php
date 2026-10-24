@@ -97,10 +97,10 @@ final class ClientTest extends TestCase {
 
 	public static function finishProblems(): array {
 		return [
-			'no public address' => [Api::problem('no-public-address', 503, 'No public address', 'This Monokulo has no public address yet.')],
-			'token refused'     => [Api::problem('invalid-connect-code', 401, 'Unknown connect code', 'This code is unknown, used or expired.')],
-			'rate limited'      => [Api::problem('rate-limited', 429, 'Too many requests', 'Wait 30 seconds.')],
-			'bad request'       => [Api::problem('invalid-request', 400, 'Invalid request', 'webhook_url is not an http(s) URL')],
+			'no public address' => [Api::FINISH_PROBLEMS['no-public-address']],
+			'token refused'     => [Api::FINISH_PROBLEMS['invalid-connect-code']],
+			'rate limited'      => [Api::FINISH_PROBLEMS['rate-limited']],
+			'bad request'       => [Api::FINISH_PROBLEMS['invalid-request']],
 		];
 	}
 
@@ -248,7 +248,7 @@ final class ClientTest extends TestCase {
 
 	public static function staleAnswers(): array {
 		return [
-			'401' => [401, Api::problem('unauthorized', 401, 'No valid key', 'unknown key')],
+			'401' => [401, Api::ORDER_PROBLEMS['unauthorized']],
 			'404' => [404, Api::problem('not-found', 404, 'Not found', 'no such route')],
 			'405' => [405, Api::problem('method-not-allowed', 405, 'Method not allowed', 'not here')],
 		];
@@ -294,13 +294,13 @@ final class ClientTest extends TestCase {
 
 	public static function failures(): array {
 		return [
-			'rate limited'     => [429, Api::problem('rate-limited', 429, 'Too many requests', 'slow down'), 'slow down', 'rate-limited', 'error_busy', 'rate limited'],
-			'bad key'          => [401, Api::problem('unauthorized', 401, 'No valid key', 'unknown key'), 'unknown key', 'unauthorized', 'error_unavailable', 'connect again from the Monokulo gateway settings'],
-			'not allowed'      => [403, Api::problem('forbidden', 403, 'Not allowed with this key', 'no'), 'no', 'forbidden', 'error_unavailable', 'refused the store secret key'],
-			'unknown currency' => [400, Api::problem('invalid-amount', 400, 'The order can\'t be priced', 'unknown currency: NOPE'), 'unknown currency: NOPE', 'invalid-amount', 'error_currency', 'can price the invoice\'s currency'],
-			'key reused'       => [409, Api::problem('idempotency-conflict', 409, 'Key used for another order', 'used'), 'used', 'idempotency-conflict', 'error_generic', 'different amount'],
-			'engine down'      => [503, Api::problem('engine-unavailable', 503, 'Payment engine unavailable', 'busy'), 'busy', 'engine-unavailable', 'error_busy', 'payment engine is busy; no order was made'],
-			'no rate'          => [503, Api::problem('rates-unavailable', 503, 'No exchange rate', 'no rate for EUR'), 'no rate for EUR', 'rates-unavailable', 'error_rates', 'no exchange rate for the invoice\'s currency right now'],
+			'rate limited'     => [429, Api::ORDER_PROBLEMS['rate-limited'], 'Rate limit exceeded; retry in 93 s.', 'rate-limited', 'error_busy', 'rate limited'],
+			'bad key'          => [401, Api::ORDER_PROBLEMS['unauthorized'], 'This key was not accepted. Check it, or connect the store or app again.', 'unauthorized', 'error_unavailable', 'connect again from the Monokulo gateway settings'],
+			'not allowed'      => [403, Api::ORDER_PROBLEMS['forbidden'], 'This store only accepts orders from its verified websites, or from its own server using the store\'s secret key.', 'forbidden', 'error_unavailable', 'refused the store secret key'],
+			'unknown currency' => [400, Api::ORDER_PROBLEMS['invalid-amount'], 'unknown currency: NOPE', 'invalid-amount', 'error_currency', 'can price the invoice\'s currency'],
+			'key reused'       => [409, Api::ORDER_PROBLEMS['idempotency-conflict'], 'this idempotency_key was already used for a different order', 'idempotency-conflict', 'error_generic', 'different amount'],
+			'engine down'      => [503, Api::ORDER_PROBLEMS['engine-unavailable'], 'The payment engine is busy or unreachable. Try again in a moment.', 'engine-unavailable', 'error_busy', 'payment engine is busy; no order was made'],
+			'no rate'          => [503, Api::ORDER_PROBLEMS['rates-unavailable'], 'There\'s no exchange rate for USD right now: the rate providers are busy or unreachable. Try again in 42 s.', 'rates-unavailable', 'error_rates', 'no exchange rate for the invoice\'s currency right now'],
 			'not a problem'    => [500, 'oops', 'oops', '', 'error_generic', ''],
 			'wrong shape'      => [201, ['id' => 'x'], 'no order_id or mk:checkout link: {"id":"x"}', '', 'error_generic', ''],
 			'not an object'    => [201, 'null', 'not JSON: null', '', 'error_generic', ''],
@@ -331,7 +331,7 @@ final class ClientTest extends TestCase {
 
 	/** A key Monokulo doesn't know is refused at the entry already, and nothing is kept. */
 	public function test_a_refused_key_at_the_entry_is_a_problem(): void {
-		self::$monokulo->respond('GET', '/api/v1', 401, Api::problem('unauthorized', 401, 'No valid key', 'unknown key'), headers: ['Content-Type' => Api::PROBLEM]);
+		self::$monokulo->respond('GET', '/api/v1', 401, Api::ORDER_PROBLEMS['unauthorized'], headers: ['Content-Type' => Api::PROBLEM]);
 
 		try {
 			$this->client()->createOrder($this->connection(), []);
@@ -382,7 +382,7 @@ final class ClientTest extends TestCase {
 		$dead = new Connection('shop.example', 'http://127.0.0.1:' . FakeMonokulo::freePort() . '/api/v1', 'pk', 'sk', 'wh', 1);
 		$this->client()->forwardLogs($dead, [['level' => 'error', 'message' => 'm', 'trace_id' => 'x']]);
 
-		self::$monokulo->respond('GET', '/api/v1', 401, Api::problem('unauthorized', 401, 'No valid key', 'unknown key'));
+		self::$monokulo->respond('GET', '/api/v1', 401, Api::ORDER_PROBLEMS['unauthorized']);
 		$this->client()->forwardLogs($this->connection(), [['level' => 'error', 'message' => 'm', 'trace_id' => 'x']]);
 		$this->assertSame(['GET /api/v1'], self::calls());
 	}
@@ -416,7 +416,7 @@ final class ClientTest extends TestCase {
 	#[DataProvider('retryAfters')]
 	public function test_a_problem_says_how_long_to_wait(array $extra, array $headers, ?int $seconds): void {
 		self::$monokulo->respond('GET', '/api/v1', 200, Api::entry(), headers: Api::entryHeaders());
-		self::$monokulo->respond('POST', '/api/v1/orders', 503, Api::problem('rates-unavailable', 503, 'No exchange rate', 'none') + $extra, headers: ['Content-Type' => Api::PROBLEM] + $headers);
+		self::$monokulo->respond('POST', '/api/v1/orders', 503, array_diff_key(Api::ORDER_PROBLEMS['rates-unavailable'], ['retry_after' => true]) + $extra, headers: ['Content-Type' => Api::PROBLEM] + $headers);
 
 		try {
 			$this->client()->createOrder($this->connection(), []);

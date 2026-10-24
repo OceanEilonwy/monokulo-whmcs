@@ -185,7 +185,15 @@ final class MonokuloSmokeTest extends TestCase {
 		$this->assertContains('sk', $create['x-monokulo-keys']);
 		$this->assertArrayHasKey('Location', $create['responses']['201']['headers']);
 		$this->assertArrayHasKey(Api::HAL_FORMS, $create['responses']['201']['content']);
-		$this->assertArrayHasKey(Api::PROBLEM, $create['responses']['default']['content']);
+		// Every problem it may answer, one response per status, each with
+		// its example: the ones WHMCS handles are the stand-in's.
+		$this->assertArrayNotHasKey('default', $create['responses']);
+		foreach (Api::ORDER_PROBLEMS as $name => $problem) {
+			$this->assertArrayHasKey(Api::PROBLEM, $create['responses'][(string)$problem['status']]['content'], $name);
+		}
+		foreach (['429', '503'] as $status) {
+			$this->assertArrayHasKey('Retry-After', $create['responses'][$status]['headers'], $status);
+		}
 		$input = $schemas['OrdersInput'];
 		$sent = ['amount', 'currency', 'merchant_order_id', 'show_merchant_order_id', 'description', 'idempotency_key'];
 		$this->assertSame([], array_diff($sent, array_keys($input['properties'])));
@@ -201,6 +209,11 @@ final class MonokuloSmokeTest extends TestCase {
 		$order = $schemas['Order'];
 		$this->assertSame([], array_diff(array_keys(Api::order()), array_keys($order['properties'])));
 		$this->assertSame([], array_diff(array_keys(Api::order(onion: true)['_links']), array_keys($order['properties']['_links']['properties'])));
+		// A field with no value is left out, never null.
+		foreach (Api::OPTIONAL_ORDER_FIELDS as $field) {
+			$this->assertNotContains($field, $order['required'] ?? [], $field);
+			$this->assertStringNotContainsString('null', (string)json_encode($order['properties'][$field]), $field);
+		}
 		foreach (['/checkout/{order_id}', '/stores/{id}/orders/{order_id}'] as $page) {
 			$this->assertArrayHasKey('text/html', $openapi['paths'][$page]['get']['responses']['200']['content'], $page);
 		}
@@ -216,9 +229,14 @@ final class MonokuloSmokeTest extends TestCase {
 			$this->assertStringContainsString('problems/' . $problem, $finish['responses'][$status]['description']);
 		}
 		// A server is never asked to solve a proof of work: not at the
-		// handshake, the entry or the secret key's forms.
-		foreach ([$finish, $root, $create, $logs] as $operation) {
+		// handshake or the logs form (secret key only). The entry and
+		// create-order list the challenge for a caller without a key or with
+		// the public key (a browser); WHMCS always sends the secret key.
+		foreach ([$finish, $logs] as $operation) {
 			$this->assertStringNotContainsString('challenge-required', (string)json_encode($operation));
+		}
+		foreach ([$root, $create] as $operation) {
+			$this->assertContains('pk', $operation['x-monokulo-keys']);
 		}
 	}
 
@@ -258,6 +276,15 @@ final class MonokuloSmokeTest extends TestCase {
 			$this->assertSame($this->hrefs($standIn['_links']), $this->hrefs($order['_links']), $name);
 			$this->assertSame($order['order_id'], $reads[$name]['order_id'], 'the order made is the one read: ' . $name);
 			$this->assertSame($this->hrefs($order['_links']), $this->hrefs($reads[$name]['_links']), $name);
+		}
+
+		// The problems the stand-in answers are the recorded ones, as they are.
+		foreach (['/api/v1/orders' => Api::ORDER_PROBLEMS, '/plugins/connect/{slug}/finish' => Api::FINISH_PROBLEMS] as $path => $problems) {
+			foreach ($problems as $name => $problem) {
+				$recorded = $this->examples($openapi['paths'][$path]['post']['responses'][(string)$problem['status']]['content'][Api::PROBLEM]);
+				$this->assertArrayHasKey($name, $recorded, $path);
+				$this->assertEquals($recorded[$name], $problem, $path . ' ' . $name);
+			}
 		}
 
 		$this->assertSame('/api/v1', $connections['no-key']['api']);
