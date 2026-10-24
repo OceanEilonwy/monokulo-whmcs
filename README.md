@@ -105,8 +105,8 @@ it again returns to the same Monokulo order while the balance is the same
 and the order hasn't expired.
 
 When Monokulo has no exchange rate for the invoice's currency right now
-(its rate providers are down) or its payment engine is busy, no order is
-made: the client is asked to try again in a few minutes, and the gateway's
+(its rate providers are down), its payment engine is busy, or it can't read
+the store's settings for a moment, no order is made: the client is asked to try again in a few minutes, and the gateway's
 log says why. Pressing Pay with Monero again sends the same request, so it
 can never make a second order.
 
@@ -186,7 +186,8 @@ settings under *Webhooks*.
   logging is on.
 - Every line ends with the request's trace id, which matches Monokulo's own
   logs. **Send errors to Monokulo** also sends warnings and errors to your
-  Monokulo, when the store there accepts client logs.
+  Monokulo, when the store there accepts client logs; if it refuses them
+  (client logs off for the store), the Activity Log says so and what to change.
 
 ## Deactivate
 

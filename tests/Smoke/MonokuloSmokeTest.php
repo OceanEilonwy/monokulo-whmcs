@@ -279,9 +279,21 @@ final class MonokuloSmokeTest extends TestCase {
 		}
 
 		// The problems the stand-in answers are the recorded ones, as they are.
-		foreach (['/api/v1/orders' => Api::ORDER_PROBLEMS, '/plugins/connect/{slug}/finish' => Api::FINISH_PROBLEMS] as $path => $problems) {
+		// Every problem each route WHMCS calls may answer is one the stand-in has.
+		$routes = [
+			['/api/v1/orders', 'post', Api::ORDER_PROBLEMS],
+			['/api/v1', 'get', Api::ENTRY_PROBLEMS],
+			['/plugins/connect/{slug}/finish', 'post', Api::FINISH_PROBLEMS],
+			['/api/v1/logs', 'post', Api::LOGS_PROBLEMS],
+		];
+		foreach ($routes as [$path, $method, $problems]) {
+			$all = [];
+			foreach ($openapi['paths'][$path][$method]['responses'] as $response) {
+				$all += $this->examples($response['content'][Api::PROBLEM] ?? []);
+			}
+			$this->assertEqualsCanonicalizing(array_keys($all), array_keys($problems), $method . ' ' . $path);
 			foreach ($problems as $name => $problem) {
-				$recorded = $this->examples($openapi['paths'][$path]['post']['responses'][(string)$problem['status']]['content'][Api::PROBLEM]);
+				$recorded = $this->examples($openapi['paths'][$path][$method]['responses'][(string)$problem['status']]['content'][Api::PROBLEM]);
 				$this->assertArrayHasKey($name, $recorded, $path);
 				$this->assertEquals($recorded[$name], $problem, $path . ' ' . $name);
 			}

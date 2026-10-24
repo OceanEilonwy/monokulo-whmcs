@@ -205,6 +205,13 @@ final class PayTest extends WhmcsTestCase {
 			'rate limited'     => [Api::ORDER_PROBLEMS['rate-limited'], 'Monero payments are busy right now', 'rate limited'],
 			'key refused'      => [Api::ORDER_PROBLEMS['unauthorized'], 'Monero payments are not available right now', 'connect again from the Monokulo gateway settings'],
 			'unknown currency' => [Api::ORDER_PROBLEMS['invalid-amount'], 'currency can&#039;t be paid in Monero', 'unknown currency: NOPE'],
+			'not allowed'      => [Api::ORDER_PROBLEMS['forbidden'], 'Monero payments are not available right now', 'connect again from the Monokulo gateway settings'],
+			'already used'     => [Api::ORDER_PROBLEMS['idempotency-conflict'], 'The Monero payment could not be started', 'payment key for a different amount'],
+			'unreadable order' => [Api::ORDER_PROBLEMS['invalid-request'], 'The Monero payment could not be started', 'could not read what this gateway sent'],
+			'too large'        => [Api::ORDER_PROBLEMS['too-large'], 'The Monero payment could not be started', 'could not read what this gateway sent'],
+			'not JSON'         => [Api::ORDER_PROBLEMS['unsupported-media-type'], 'The Monero payment could not be started', 'could not read what this gateway sent'],
+			'a challenge'      => [Api::ORDER_PROBLEMS['challenge-required'], 'Monero payments are busy right now', 'proof-of-work challenge'],
+			'monokulo failed'  => [Api::ORDER_PROBLEMS['internal'], 'The Monero payment could not be started', 'its operator can find it'],
 		];
 	}
 
@@ -224,10 +231,34 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertSame([], Whmcs::rows('mod_monokulo_order'));
 	}
 
+	public static function entryFailures(): array {
+		return [
+			'key refused'  => [Api::ENTRY_PROBLEMS['unauthorized'], 'Monero payments are not available right now', 'connect again from the Monokulo gateway settings'],
+			'a challenge'  => [Api::ENTRY_PROBLEMS['challenge-required'], 'Monero payments are busy right now', 'proof-of-work challenge'],
+			'rate limited' => [Api::ENTRY_PROBLEMS['rate-limited'], 'Monero payments are busy right now', 'rate limited'],
+		];
+	}
+
+	/** Monokulo refusing to give the API's entry: no order is asked for, the client is told and the merchant why. */
+	#[\PHPUnit\Framework\Attributes\DataProvider('entryFailures')]
+	public function test_when_monokulo_refuses_the_entry_the_client_is_told_and_the_merchant_given_a_hint(array $problem, string $client, string $hint): void {
+		$invoice = Whmcs::invoice();
+		self::$monokulo->respond('GET', '/api/v1', $problem['status'], $problem, headers: ['Content-Type' => Api::PROBLEM]);
+
+		$response = $this->get($this->payLink($invoice));
+
+		$this->assertSame(502, $response->status);
+		$this->assertStringContainsString($client, $response->body);
+		$this->assertStringContainsString('Creating the Monokulo order for invoice ' . $invoice . ' failed: HTTP ' . $problem['status'] . ': ' . $problem['detail'], Whmcs::logs());
+		$this->assertStringContainsString($hint, Whmcs::logs());
+		$this->assertSame([], $this->creates());
+	}
+
 	public static function tryAgainShortly(): array {
 		return [
 			'no exchange rate' => [Api::ORDER_PROBLEMS['rates-unavailable'], ['Retry-After' => '42'], 'Monero prices are not available right now', 'no exchange rate for the invoice\'s currency right now', '42'],
 			'engine busy'      => [Api::ORDER_PROBLEMS['engine-unavailable'], [], 'Monero payments are busy right now', 'payment engine is busy', null],
+			'store settings'   => [Api::ORDER_PROBLEMS['store-unavailable'], [], 'Monero payments are busy right now', 'couldn\'t read the store\'s settings', null],
 		];
 	}
 
@@ -460,6 +491,38 @@ final class PayTest extends WhmcsTestCase {
 		$this->assertStringContainsString('HTTP 429', $entries[0]['message']);
 		$this->assertStringContainsString('[trace ' . $entries[0]['trace_id'] . ']', Whmcs::logs());
 		$this->assertStringContainsString('00-' . $entries[0]['trace_id'] . '-', $requests[1]['headers']['traceparent'], 'the order request carried the same trace');
+	}
+
+	public static function logsRefusals(): array {
+		return [
+			'client logs off' => [Api::LOGS_PROBLEMS['logs-off'], 'turn them on in the store\'s settings on Monokulo, or turn off "Send errors to Monokulo"'],
+			'key refused'     => [Api::LOGS_PROBLEMS['unauthorized'], 'connect again from the Monokulo gateway settings'],
+			'not allowed'     => [Api::LOGS_PROBLEMS['forbidden'], 'connect again from the Monokulo gateway settings'],
+			'rate limited'    => [Api::LOGS_PROBLEMS['rate-limited'], 'rate limited'],
+			'unreadable'      => [Api::LOGS_PROBLEMS['invalid-request'], 'could not read what this gateway sent'],
+			'too large'       => [Api::LOGS_PROBLEMS['too-large'], 'could not read what this gateway sent'],
+			'not JSON'        => [Api::LOGS_PROBLEMS['unsupported-media-type'], 'could not read what this gateway sent'],
+		];
+	}
+
+	/**
+	 * Monokulo refusing the forwarded errors is said in WHMCS's own log,
+	 * with what to change (client logs off: turn them on, or stop sending),
+	 * and isn't sent again.
+	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('logsRefusals')]
+	public function test_monokulo_refusing_the_forwarded_errors_is_logged_in_whmcs(array $problem, string $hint): void {
+		Whmcs::setting('forwardErrors', 'on');
+		$invoice = Whmcs::invoice();
+		$this->monokuloCreates(problem: Api::ORDER_PROBLEMS['rate-limited']);
+		self::$monokulo->respond('POST', '/api/v1/logs', $problem['status'], $problem, headers: ['Content-Type' => Api::PROBLEM]);
+
+		$this->get($this->payLink($invoice));
+
+		$this->assertStringContainsString('Monokulo did not take this request\'s warnings and errors: HTTP ' . $problem['status'] . ': ' . $problem['detail'], Whmcs::logs());
+		$this->assertStringContainsString($hint, Whmcs::logs());
+		$paths = array_column(self::$monokulo->requests(), 'path');
+		$this->assertSame(['/api/v1', '/api/v1/orders', '/api/v1/logs'], array_slice($paths, 0, 3));
 	}
 
 	public function test_errors_stay_in_whmcs_otherwise(): void {

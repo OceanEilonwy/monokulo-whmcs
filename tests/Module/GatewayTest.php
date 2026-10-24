@@ -128,6 +128,7 @@ final class GatewayTest extends WhmcsTestCase {
 			'unavailable' => [['monokulo_connect_error' => 'unavailable'], 'its operator has not set its public address'],
 			'busy'        => [['monokulo_connect_error' => 'busy'], 'Your Monokulo is busy right now'],
 			'unreachable' => [['monokulo_connect_error' => 'unreachable'], 'could not be reached from this server'],
+			'callback'    => [['monokulo_connect_error' => 'callback'], 'Check that the System URL'],
 		];
 	}
 

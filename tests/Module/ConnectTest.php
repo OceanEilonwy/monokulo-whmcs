@@ -223,6 +223,10 @@ final class ConnectTest extends WhmcsTestCase {
 			'token refused'         => [401, Api::FINISH_PROBLEMS['invalid-connect-code'], 'finish'],
 			'rate limited'          => [429, Api::FINISH_PROBLEMS['rate-limited'], 'busy'],
 			'failed after spending' => [500, Api::FINISH_PROBLEMS['internal'], 'finish'],
+			'callback refused'      => [400, Api::FINISH_PROBLEMS['invalid-request'], 'callback'],
+			'not a plugin slug'     => [404, Api::FINISH_PROBLEMS['not-found'], 'finish'],
+			'too large'             => [413, Api::FINISH_PROBLEMS['too-large'], 'finish'],
+			'not JSON'              => [415, Api::FINISH_PROBLEMS['unsupported-media-type'], 'finish'],
 			'missing secret'        => [200, ['public_key' => 'pk', 'secret_token' => 'sk', 'api' => '/api/v1'], 'finish'],
 			'missing entry'         => [200, ['public_key' => 'pk', 'secret_token' => 'sk', 'webhook_signing_secret' => 'wh'], 'finish'],
 		];

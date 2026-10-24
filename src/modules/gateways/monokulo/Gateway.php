@@ -9,7 +9,7 @@ namespace Monokulo\Whmcs;
  * the check on saving them, and the Pay with Monero link on an invoice.
  */
 final class Gateway {
-	private const CONNECT_ERRORS = ['address', 'host', 'finish', 'unavailable', 'busy', 'unreachable'];
+	private const CONNECT_ERRORS = ['address', 'host', 'finish', 'unavailable', 'busy', 'unreachable', 'callback'];
 
 	public function __construct(
 		private readonly Whmcs $whmcs,

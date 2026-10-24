@@ -205,6 +205,7 @@ final class Callback {
 			return 'monokulo_connect_error=' . match ($e->problem) {
 				'no-public-address' => 'unavailable',
 				'rate-limited'      => 'busy',
+				'invalid-request'   => 'callback',
 				default             => 'finish',
 			};
 		} catch (TransportError $e) {
@@ -235,7 +236,10 @@ final class Callback {
 	private function forward(): void {
 		$connection = $this->connection();
 		if ($connection && ($this->gateway['forwardErrors'] ?? '') === 'on') {
-			$this->client()->forwardLogs($connection, $this->log->forwardable());
+			$refused = $this->client()->forwardLogs($connection, $this->log->forwardable());
+			if ($refused) {
+				$this->log->warning(sprintf('Monokulo did not take this request\'s warnings and errors: HTTP %d: %s%s', $refused->status, $refused->detail, $refused->merchantHint()));
+			}
 		}
 	}
 
