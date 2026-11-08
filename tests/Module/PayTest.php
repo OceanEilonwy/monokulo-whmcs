@@ -57,7 +57,7 @@ final class PayTest extends WhmcsTestCase {
 			'currency'               => 'EUR',
 			'merchant_order_id'      => (string)$invoice,
 			'show_merchant_order_id' => true,
-			'description'            => 'Invoice #' . $invoice . ': Starter - example.com + 2 more',
+			'description'            => 'Starter - example.com + 2 more',
 			'idempotency_key'        => 'whmcs:' . $invoice . ':100.5:EUR:0',
 		], $this->sent());
 		$request = $this->creates()[0];
@@ -110,7 +110,8 @@ final class PayTest extends WhmcsTestCase {
 		$this->get($this->payLink($invoice));
 
 		$this->assertSame('INV-2026-007', $this->sent()['merchant_order_id']);
-		$this->assertStringStartsWith('Invoice #INV-2026-007: ', $this->sent()['description']);
+		$this->assertTrue($this->sent()['show_merchant_order_id']);
+		$this->assertStringNotContainsString('INV-2026-007', $this->sent()['description'], 'the checkout shows the number as the reference');
 	}
 
 	/** Pressed again: the same key, so Monokulo answers with the same order; WHMCS keeps it once. */
