@@ -102,7 +102,7 @@ final class Callback {
 		}
 
 		$attempt = $this->repository->attempt($invoiceId);
-		$body = OrderRequest::body($invoice, $attempt, sprintf(Text::get('text_invoice'), $invoice->number), Text::get('text_more'));
+		$body = OrderRequest::body($invoice, $attempt, Text::get('text_more'));
 		try {
 			// Over Tor, the entry says first whether Monokulo has an onion
 			// address at all: without one no order is made, to expire unused.

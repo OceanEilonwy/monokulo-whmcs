@@ -56,7 +56,6 @@ final class Text {
 		'button_pay'                => 'Pay with Monero',
 		'text_pay'                  => 'You pay on a secure Monokulo payment page next.',
 		'text_unavailable'          => 'Monero payments are not set up yet. Please contact us to pay this invoice.',
-		'text_invoice'              => 'Invoice #%s',
 		'text_more'                 => ' + %d more',
 		'text_back'                 => 'Back to the invoice',
 		'error_title'               => 'Pay with Monero',

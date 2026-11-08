@@ -9,7 +9,9 @@ namespace Monokulo\Whmcs;
  * The amount is the invoice's balance in the client's currency, and
  * Monokulo converts it to XMR at its own rate: WHMCS never converts. The
  * invoice number goes along as the merchant's reference and is shown on the
- * checkout (the client knows their invoice by it). The idempotency key makes
+ * checkout (the client knows their invoice by it), so the description is only
+ * what the invoice is for, and is left out when it has no items. The
+ * idempotency key makes
  * a second press of Pay with Monero get the same Monokulo order, and a
  * changed balance or currency, or an expired earlier order, a new one.
  */
@@ -17,16 +19,17 @@ final class OrderRequest {
 	public const MAX_DESCRIPTION_CHARS = 140;
 
 	/** @return array<string, mixed> */
-	public static function body(Invoice $invoice, int $attempt, string $descriptionPrefix, string $moreFormat): array {
+	public static function body(Invoice $invoice, int $attempt, string $moreFormat): array {
 		$currency = strtoupper($invoice->currency);
 		$amount = self::amount($invoice->balance, $currency);
+		$description = self::description($invoice->items, $moreFormat);
 
 		return [
 			'amount'                 => $amount,
 			'currency'               => $currency,
 			'merchant_order_id'      => $invoice->number,
 			'show_merchant_order_id' => true,
-			'description'            => self::description($descriptionPrefix, $invoice->items, $moreFormat),
+		] + ($description === '' ? [] : ['description' => $description]) + [
 			'idempotency_key'        => sprintf('whmcs:%d:%s:%s:%d', $invoice->id, $amount, $currency, $attempt),
 		];
 	}
@@ -65,15 +68,15 @@ final class OrderRequest {
 	}
 
 	/**
-	 * "Invoice #1042: Web hosting + 2 more", on one line, at most 140
-	 * characters.
+	 * "Web hosting + 2 more", on one line, at most 140 characters; empty for
+	 * an invoice without items.
 	 *
 	 * @param list<string> $itemNames
 	 */
-	public static function description(string $prefix, array $itemNames, string $moreFormat): string {
-		$description = $prefix;
+	public static function description(array $itemNames, string $moreFormat): string {
+		$description = '';
 		if ($itemNames) {
-			$description .= ': ' . $itemNames[0];
+			$description = $itemNames[0];
 			if (count($itemNames) > 1) {
 				$description .= sprintf($moreFormat, count($itemNames) - 1);
 			}
